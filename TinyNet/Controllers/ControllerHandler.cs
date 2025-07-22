@@ -1,8 +1,10 @@
 ﻿using System.Reflection;
 using System.Text.Json;
+using TinyNet.ActionResult;
+using TinyNet.ActionResult.Results;
 using TinyNet.DI;
 using TinyNet.Http;
-using TinyNet.Result;
+using TinyNet.TaskResult;
 using HttpMethod = System.Net.Http.HttpMethod;
 
 namespace TinyNet.Controllers;
@@ -11,16 +13,33 @@ public class ControllerHandler
 {
     private Dictionary<string, Type> _controllers = new();
     private DIContainer _container;
+    private bool _initstate = false;
 
     public ControllerHandler(DIContainer container)
     {
         _container = container;
-        InitControllers();
     }
 
-    private void InitControllers()
+    internal void InitControllers()
     {
-        var controllerTypes = Assembly.GetExecutingAssembly().GetTypes().Where(t => t.IsSubclassOf(typeof(Controller)));
+        if (_initstate)
+            throw new Exception("controllers cant be initialized 2nd time");
+        _initstate = true;
+        var assemblies = AppDomain.CurrentDomain.GetAssemblies();
+        var controllerTypes = assemblies
+            .SelectMany(assembly => 
+            {
+                try
+                {
+                    return assembly.GetTypes();
+                }
+                catch (ReflectionTypeLoadException)
+                {
+                    return Array.Empty<Type>();
+                }
+            })
+            .Where(t => t.IsSubclassOf(typeof(Controller)) && !t.IsAbstract)
+            .ToList();
         var transientMethodInfo = typeof(DIContainer)
             .GetMethods()
             .First(m => m.Name == "AddTransient" && 
@@ -39,9 +58,11 @@ public class ControllerHandler
         }
     }
 
-    public Type GetControllerType(string url)
+    public TaskResult<Type> GetControllerType(string url)
     {
-        return _controllers[url];
+        if (!_controllers.TryGetValue(url, out var type))
+            return new TaskResult<Type>("Route not found");
+        return new TaskResult<Type>(type);
     }
 
     public Controller? GetController(string url, DIScope scope)
@@ -113,14 +134,14 @@ public class ControllerHandler
                 await taskResult.ConfigureAwait(false);
                 if (taskResult.GetType().IsGenericType)
                 {
-                    var resultProperty = taskResult.GetType().GetProperty("Result");
-                    ((IResult)resultProperty.GetValue(taskResult)).ExecuteResult(ref httpContext);
+                    var resultProperty = taskResult.GetType().GetProperty("ActionResult");
+                    ((IActionResult)resultProperty.GetValue(taskResult)).ExecuteResult(ref httpContext);
                     return;
                 }
                 new Ok().ExecuteResult(ref httpContext);
             }
 
-            ((IResult)result).ExecuteResult(ref httpContext);
+            ((IActionResult)result).ExecuteResult(ref httpContext);
             return;
         }
         catch (TargetInvocationException ex)

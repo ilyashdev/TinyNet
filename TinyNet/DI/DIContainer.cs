@@ -1,9 +1,13 @@
-﻿namespace TinyNet.DI;
+﻿
+
+using TinyNet.Middleware;
+
+namespace TinyNet.DI;
 
 public class DIContainer
 {
     private readonly Dictionary<Type, object> _singletonInstances = new();
-    private readonly List<ServiceDescriptor> _descriptors = new();
+    private readonly List<ServiceDescriptor> _descriptors = new(); 
     private readonly HashSet<Type> _instanceTypes = new();
 
     public void AddTransient<TService, TImplementation>() where TImplementation : TService
@@ -52,6 +56,23 @@ public class DIContainer
         {
             _instanceTypes.Clear();
         }
+    }
+
+    internal Middleware.Middleware GetMiddleware(Type middlewareType,RequestDelegate next, DIScope scope)
+    {
+        var ctor = middlewareType.GetConstructors()
+            .OrderByDescending(c => c.GetParameters().Length)
+            .First();
+        var paramsInfo = ctor.GetParameters();
+        var parameters = new object[paramsInfo.Length];
+        foreach (var parameter in paramsInfo)
+        {
+            if (parameter.ParameterType == typeof(RequestDelegate))
+                parameters[paramsInfo.Length - 1] = next;
+            else
+            parameters[paramsInfo.Length - 1] = GetService(parameter.ParameterType, scope);
+        }
+        return (Middleware.Middleware)ctor.Invoke(parameters);
     }
 
     internal object GetInstance(ServiceDescriptor descriptor, Dictionary<Type, object> instances, DIScope scope)

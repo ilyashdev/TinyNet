@@ -27,33 +27,33 @@ public class MiddlewarePipeline
         _filterMiddlewares.Add(typeof(T));
     }
 
-    private List<IMiddleware> CreatePipeline(IEnumerable<FilterAttribute> filters, DIScope scope)
+    private List<IMiddleware> CreatePipeline(IEnumerable<FilterAttribute> filters, DIScope scope, RequestDelegate final)
     {
         var pipeline = new List<IMiddleware>();
         var pipelineMiddlewares = new List<Type>();
         pipelineMiddlewares.AddRange(_allMiddlewares);
         pipelineMiddlewares.AddRange(_filterMiddlewares.Where(c => filters.Any(f => f.FilterType == c)));
+        pipelineMiddlewares.Reverse();
+        RequestDelegate temp = final;
         foreach (var middleware in pipelineMiddlewares)
         {
-            var serviceMethodInfo = typeof(DIContainer).GetMethod("GetService");
-            pipeline.Add((IMiddleware)serviceMethodInfo
-                .MakeGenericMethod(middleware)
-                .Invoke(_container, [scope]));
+            var middlewareInstance = _container.GetMiddleware(middleware, temp, scope);
+            pipeline.Add(middlewareInstance);
+            temp = middlewareInstance.InvokeAsync;
         }
         return pipeline;
     }
     
-    public async Task InvokeAsync(HttpContext context, Type controller,DIScope scope, RequestDelegate finalHandler)
+    public async Task InvokeAsync(HttpContext context, Type controller,DIScope scope, RequestDelegate final)
     {
-        
         var attributes = controller.GetCustomAttributes<FilterAttribute>();
-        var pipeline = CreatePipeline(attributes,scope);
-        for (int i = 0; i < pipeline.Count-1; i++)
+        var pipeline = CreatePipeline(attributes,scope, final);
+        if (pipeline.Count == 0)
         {
-            RequestDelegate next = pipeline[i + 1].InvokeAsync;
-            await pipeline[i].InvokeAsync(context, next);
+            await final(context);
+            return;
         }
-        await pipeline.Last().InvokeAsync(context, finalHandler);
+        await pipeline.Last().InvokeAsync(context);
     }
     
 }

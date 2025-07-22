@@ -1,9 +1,9 @@
 ﻿using TinyNet.Http;
 
-namespace TinyNet.Result;
+namespace TinyNet.ActionResult;
 
 
-public interface IResult
+public interface IActionResult
 { 
     void ExecuteResult(ref HttpContext context);
 }

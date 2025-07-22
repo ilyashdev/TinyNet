@@ -1,9 +1,9 @@
 ﻿using System.Text.Json;
 using TinyNet.Http;
 
-namespace TinyNet.Result;
+namespace TinyNet.ActionResult.Results;
 
-public class Ok : Result
+public class Ok : ActionResult
 {
     private readonly object? _response;
 

@@ -1,8 +1,8 @@
-﻿using TinyNet.Controllers;
+﻿using TinyNet.ActionResult.Results;
+using TinyNet.Controllers;
 using TinyNet.DI;
 using TinyNet.Http;
 using TinyNet.Middleware;
-using TinyNet.Result;
 
 namespace TinyNet.Application;
 
@@ -45,21 +45,28 @@ public class WebApplication
                 HttpRequest request = await client.GetRequest();
                 HttpContext context = new(request, null);
                 var adapter = new MiddlewareControllerAdapter(_controllerHandler, scope);
-                Type controllerType;
                 try
                 {
-                    controllerType = _controllerHandler.GetControllerType(request.Url);
-                    await _pipeline.InvokeAsync(
-                        context,
-                        controllerType,
-                        scope,
-                        adapter.InvokeAsync
-                    );
+                    var controllerType  = _controllerHandler.GetControllerType(request.Url);
+                    if (controllerType.Status != "OK")
+                    {
+                        new BadRequest(controllerType.Status).ExecuteResult(ref context);
+                    }
+                    else
+                    {
+                        
+                        await _pipeline.InvokeAsync(
+                            context,
+                            controllerType.Result,
+                            scope,
+                            adapter.InvokeAsync
+                        );
+                    }
                     client.SendResponse(context.Response);
                 }
                 catch
                 {
-                    new BadRequest("path not found").ExecuteResult(ref context);
+                    new InternalError("Internal sever problem").ExecuteResult(ref context);
                     client.SendResponse(context.Response);
                 }
             }

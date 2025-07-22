@@ -16,7 +16,7 @@ public class MiddlewareControllerAdapter
         _scope = scope;
     }
 
-    public async Task InvokeAsync(HttpContext httpContext, RequestDelegate? next)
+    public async Task InvokeAsync(HttpContext httpContext)
     {
         await _controllerHandler.Handle(httpContext, _scope);
     }

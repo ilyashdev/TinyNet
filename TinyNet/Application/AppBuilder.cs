@@ -14,10 +14,13 @@ public class AppBuilder
     public AppBuilder()
     {
         Services = new DIContainer();
-        _handler = new NetHandler(5768);
+        _handler = new NetHandler(5267);
         Pipeline = new MiddlewarePipeline(Services);
         _controllerHandler = new ControllerHandler(Services);
+        _controllerHandler.InitControllers();
     }
+
+
     
     public WebApplication Build()
         => new WebApplication(_handler,_controllerHandler, Pipeline);

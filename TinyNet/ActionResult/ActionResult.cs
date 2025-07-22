@@ -4,9 +4,9 @@ using System.Text.Json.Serialization;
 using System.Text.Unicode;
 using TinyNet.Http;
 
-namespace TinyNet.Result;
+namespace TinyNet.ActionResult;
 
-public abstract class Result : IResult
+public abstract class ActionResult : IActionResult
 {
     protected static readonly JsonSerializerOptions Options = new()
     {

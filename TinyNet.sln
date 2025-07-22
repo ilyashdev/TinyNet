@@ -2,6 +2,8 @@
 Microsoft Visual Studio Solution File, Format Version 12.00
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TinyNet", "TinyNet\TinyNet.csproj", "{DB80A4F4-6999-4FAF-A079-4A32B80643C8}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TinyNetTestApp", "TinyNetTestApp\TinyNetTestApp.csproj", "{0E932C4D-7C44-40DE-B133-C28C41672A6C}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -12,5 +14,9 @@ Global
 		{DB80A4F4-6999-4FAF-A079-4A32B80643C8}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{DB80A4F4-6999-4FAF-A079-4A32B80643C8}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{DB80A4F4-6999-4FAF-A079-4A32B80643C8}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0E932C4D-7C44-40DE-B133-C28C41672A6C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0E932C4D-7C44-40DE-B133-C28C41672A6C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0E932C4D-7C44-40DE-B133-C28C41672A6C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0E932C4D-7C44-40DE-B133-C28C41672A6C}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

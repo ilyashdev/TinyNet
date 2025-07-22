@@ -1,13 +1,13 @@
 ﻿using System.Text.Json;
 using TinyNet.Http;
 
-namespace TinyNet.Result;
+namespace TinyNet.ActionResult.Results;
 
-public class BadRequest : Result
+public class InternalError : ActionResult
 {
     private readonly object? _response;
 
-    public BadRequest(object? response = null)
+    public InternalError(object? response = null)
     {
         _response = response;
     }
@@ -16,10 +16,10 @@ public class BadRequest : Result
     {
         if (_response != null)
         {
-            context.Response = new HttpResponse(400, JsonSerializer.Serialize(_response, Options));
+            context.Response = new HttpResponse(500, JsonSerializer.Serialize(_response, Options));
             context.Response.Headers.Add("Content-Type", "application/json; charset=utf-8");
             return;
         }
-        context.Response = new HttpResponse(400);
+        context.Response = new HttpResponse(500);
     }
 }

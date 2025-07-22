@@ -4,5 +4,5 @@ namespace TinyNet.Middleware;
 
 public interface IMiddleware
 {
-    Task InvokeAsync(HttpContext context, RequestDelegate next);
+    Task InvokeAsync(HttpContext context);
 }
