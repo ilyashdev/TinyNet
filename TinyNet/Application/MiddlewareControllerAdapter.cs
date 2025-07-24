@@ -1,7 +1,6 @@
 ﻿using TinyNet.Controllers;
 using TinyNet.DI;
 using TinyNet.Http;
-using TinyNet.Middleware;
 
 namespace TinyNet.Application;
 

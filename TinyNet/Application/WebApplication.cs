@@ -2,7 +2,8 @@
 using TinyNet.Controllers;
 using TinyNet.DI;
 using TinyNet.Http;
-using TinyNet.Middleware;
+using TinyNet.Middlewares;
+using TinyNet.TaskResult;
 
 namespace TinyNet.Application;
 
@@ -47,8 +48,8 @@ public class WebApplication
                 var adapter = new MiddlewareControllerAdapter(_controllerHandler, scope);
                 try
                 {
-                    var controllerType  = _controllerHandler.GetControllerType(request.Url);
-                    if (controllerType.Status != "OK")
+                    var controllerType  = _controllerHandler.GetTypeHandler(request.Url);
+                    if (controllerType.Status != HandleResultStatus.Success)
                     {
                         new BadRequest(controllerType.Status).ExecuteResult(ref context);
                     }
@@ -64,9 +65,10 @@ public class WebApplication
                     }
                     client.SendResponse(context.Response);
                 }
-                catch
+                catch (Exception ex)
                 {
-                    new InternalError("Internal sever problem").ExecuteResult(ref context);
+                    Console.WriteLine($"Processing error: {ex.Message}");
+                    new InternalError().ExecuteResult(ref context);
                     client.SendResponse(context.Response);
                 }
             }

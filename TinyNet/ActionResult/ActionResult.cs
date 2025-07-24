@@ -16,5 +16,15 @@ public abstract class ActionResult : IActionResult
         ReadCommentHandling = JsonCommentHandling.Skip,
         NumberHandling = JsonNumberHandling.AllowReadingFromString
     };
-    public abstract void ExecuteResult(ref HttpContext context);
+
+    protected int _statusCode;
+    public ActionResult(int statusCode)
+    {
+        _statusCode = statusCode;
+    }
+    
+    public virtual void ExecuteResult(ref HttpContext context)
+    {
+        context.Response = new HttpResponse(_statusCode);
+    }
 }

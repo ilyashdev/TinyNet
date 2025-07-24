@@ -1,6 +1,6 @@
 ﻿using TinyNet.Http;
 
-namespace TinyNet.Middleware;
+namespace TinyNet.Middlewares;
 
 public interface IMiddleware
 {

@@ -1,4 +1,4 @@
-﻿namespace TinyNet.Middleware;
+﻿namespace TinyNet.Middlewares;
 [AttributeUsage(AttributeTargets.Class)]
 public class FilterAttribute : Attribute
 {

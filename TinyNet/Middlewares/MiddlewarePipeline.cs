@@ -2,7 +2,7 @@
 using TinyNet.DI;
 using TinyNet.Http;
 
-namespace TinyNet.Middleware;
+namespace TinyNet.Middlewares;
 
 public class MiddlewarePipeline
 {
@@ -15,13 +15,13 @@ public class MiddlewarePipeline
         _container = container;
     }
 
-    public void RegisterMiddleware<T>() where T : IMiddleware
+    public void RegisterMiddleware<T>() where T : Middleware
     {
         _container.AddTransient<T>();
         _allMiddlewares.Add(typeof(T));
     }
 
-    public void RegisterFilter<T>() where T : IMiddleware
+    public void RegisterFilter<T>() where T : Middleware
     {
         _container.AddTransient<T>();
         _filterMiddlewares.Add(typeof(T));

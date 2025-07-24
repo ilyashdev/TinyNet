@@ -4,16 +4,15 @@ namespace TinyNet.ActionResult.Results;
 
 public class HtmlView : ActionResult
 {
-    private string _html;
-
-    public HtmlView(string html)
+    private string _htmlContent;
+    public HtmlView(string htmlContent) : base( 200)
     {
-        _html = html;
+        _htmlContent = htmlContent;
     }
 
     public override void ExecuteResult(ref HttpContext context)
     {
-            context.Response = new HttpResponse(200, _html);
+            context.Response = new HttpResponse(200, _htmlContent);
             context.Response.Headers.Add("Content-Type", "text/html; charset=utf-8");
             return;
     }

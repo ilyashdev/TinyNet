@@ -1,6 +1,6 @@
 ﻿
 
-using TinyNet.Middleware;
+using TinyNet.Middlewares;
 
 namespace TinyNet.DI;
 
@@ -25,6 +25,12 @@ public class DIContainer
         => Register<TService, TImplementation>(ServiceLifetime.Singleton);
     public void AddSingleton<TImplementation>()
         => Register<TImplementation, TImplementation>(ServiceLifetime.Singleton);
+
+    public void AddInstance<TService>(TService instance)
+    {
+        AddSingleton<TService>();
+        _singletonInstances.Add(typeof(TService), instance);
+    }
 
     private void Register<TService, TImplementation>(ServiceLifetime lifetime)
     {
@@ -58,7 +64,7 @@ public class DIContainer
         }
     }
 
-    internal Middleware.Middleware GetMiddleware(Type middlewareType,RequestDelegate next, DIScope scope)
+    internal Middleware GetMiddleware(Type middlewareType,RequestDelegate next, DIScope scope)
     {
         var ctor = middlewareType.GetConstructors()
             .OrderByDescending(c => c.GetParameters().Length)
@@ -72,7 +78,7 @@ public class DIContainer
             else
             parameters[paramsInfo.Length - 1] = GetService(parameter.ParameterType, scope);
         }
-        return (Middleware.Middleware)ctor.Invoke(parameters);
+        return (Middleware)ctor.Invoke(parameters);
     }
 
     internal object GetInstance(ServiceDescriptor descriptor, Dictionary<Type, object> instances, DIScope scope)

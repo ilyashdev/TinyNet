@@ -1,5 +1,5 @@
 ﻿using TinyNet.Http;
 
-namespace TinyNet.Middleware;
+namespace TinyNet.Middlewares;
 
 public delegate Task RequestDelegate(HttpContext context);

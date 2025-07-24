@@ -5,7 +5,6 @@ using TinyNet.ActionResult.Results;
 using TinyNet.DI;
 using TinyNet.Http;
 using TinyNet.TaskResult;
-using HttpMethod = System.Net.Http.HttpMethod;
 
 namespace TinyNet.Controllers;
 
@@ -14,7 +13,9 @@ public class ControllerHandler
     private Dictionary<string, Type> _controllers = new();
     private DIContainer _container;
     private bool _initstate = false;
-
+    
+    
+    
     public ControllerHandler(DIContainer container)
     {
         _container = container;
@@ -48,6 +49,8 @@ public class ControllerHandler
         var serviceMethodInfo = typeof(DIContainer).GetMethod("GetService");
         foreach (var controllerType in controllerTypes)
         {
+            if(controllerType.CustomAttributes.Any(a => a.AttributeType == typeof(NotMappedAttribute)))
+                continue;
             transientMethodInfo
                 .MakeGenericMethod(controllerType)
                 .Invoke(_container, null);
@@ -58,30 +61,35 @@ public class ControllerHandler
         }
     }
 
-    public TaskResult<Type> GetControllerType(string url)
+    public HandleResult<Type> GetTypeHandler(string url)
     {
+        if (url.Contains("."))
+            return new HandleResult<Type>(typeof(MediaHandler));
         if (!_controllers.TryGetValue(url, out var type))
-            return new TaskResult<Type>("Route not found");
-        return new TaskResult<Type>(type);
+            return new HandleResult<Type>(HandleResultStatus.NotFound);
+        return new HandleResult<Type>(type);
     }
 
     public Controller? GetController(string url, DIScope scope)
     {
         var serviceMethodInfo = typeof(DIContainer).GetMethod("GetService");
+        var type = GetTypeHandler(url);
+        if(type.Status != HandleResultStatus.Success)
+            return null;
         return (Controller)serviceMethodInfo
-            .MakeGenericMethod(_controllers[url])
+            .MakeGenericMethod(type.Result)
             .Invoke(_container, [scope]);
     }
 
     public async Task Handle(HttpContext httpContext, DIScope scope)
     {
-        var controller = GetController(httpContext.Request.Url, scope);
+        Controller controller = GetController(httpContext.Request.Url, scope);
         if (controller == null)
         {
             new BadRequest("Not Found endpoint").ExecuteResult(ref httpContext);
             return;
         };
-        
+        controller.SetContext(httpContext);
         var methods = controller.GetType()
             .GetMethods()
             .Where(m => 
@@ -134,13 +142,12 @@ public class ControllerHandler
                 await taskResult.ConfigureAwait(false);
                 if (taskResult.GetType().IsGenericType)
                 {
-                    var resultProperty = taskResult.GetType().GetProperty("ActionResult");
-                    ((IActionResult)resultProperty.GetValue(taskResult)).ExecuteResult(ref httpContext);
+                    ((Task<IActionResult>)taskResult).Result.ExecuteResult(ref httpContext);
                     return;
                 }
-                new Ok().ExecuteResult(ref httpContext);
+                new Ok("").ExecuteResult(ref httpContext);
+                return;
             }
-
             ((IActionResult)result).ExecuteResult(ref httpContext);
             return;
         }
@@ -150,3 +157,4 @@ public class ControllerHandler
         }
     }
 }
+

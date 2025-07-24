@@ -3,23 +3,13 @@ using TinyNet.Http;
 
 namespace TinyNet.ActionResult.Results;
 
-public class Ok : ActionResult
+public class Ok : BaseResult
 {
-    private readonly object? _response;
-
-    public Ok(object? response = null)
+    public Ok() : base(200)
     {
-        _response = response;
     }
-    
-    public override void ExecuteResult(ref HttpContext context)
+
+    public Ok(object data) : base(200, data)
     {
-        if (_response != null)
-        {
-            context.Response = new HttpResponse(200, JsonSerializer.Serialize(_response, Options));
-            context.Response.Headers.Add("Content-Type", "application/json; charset=utf-8");
-            return;
-        }
-        context.Response = new HttpResponse(200);
     }
 }
