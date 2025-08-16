@@ -55,7 +55,7 @@ public class DIContainer
             {
                 ServiceLifetime.Transient => CreateInstance(descriptor.ImplementationType, scope),
                 ServiceLifetime.Scoped => GetInstance(descriptor, scope._scopedInstances, scope),
-                ServiceLifetime.Singleton => GetInstance(descriptor, _singletonInstances, scope),
+                ServiceLifetime.Singleton => GetInstance(descriptor, _singletonInstances.ToDictionary(), scope),
                 _ => throw new ArgumentOutOfRangeException()
             };
         }
