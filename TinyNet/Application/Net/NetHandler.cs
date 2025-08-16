@@ -10,8 +10,11 @@ public class NetHandler
     {
         IPEndPoint ipEndPoint = new IPEndPoint(IPAddress.Any, port);
         _socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        _socket.ReceiveTimeout = 5000;
+        _socket.SendTimeout = 5000;
         _socket.Bind(ipEndPoint);
         _socket.Listen(100);
+        
     }
 
     public NetClient Accept()

@@ -1,12 +1,13 @@
 ﻿
 
+using System.Collections.Concurrent;
 using TinyNet.Middlewares;
 
 namespace TinyNet.DI;
 
 public class DIContainer
 {
-    private readonly Dictionary<Type, object> _singletonInstances = new();
+    private readonly ConcurrentDictionary<Type, object> _singletonInstances = new();
     private readonly List<ServiceDescriptor> _descriptors = new(); 
     private readonly HashSet<Type> _instanceTypes = new();
 
@@ -29,7 +30,7 @@ public class DIContainer
     public void AddInstance<TService>(TService instance)
     {
         AddSingleton<TService>();
-        _singletonInstances.Add(typeof(TService), instance);
+        _singletonInstances.TryAdd(typeof(TService), instance);
     }
 
     private void Register<TService, TImplementation>(ServiceLifetime lifetime)
@@ -54,7 +55,7 @@ public class DIContainer
             {
                 ServiceLifetime.Transient => CreateInstance(descriptor.ImplementationType, scope),
                 ServiceLifetime.Scoped => GetInstance(descriptor, scope._scopedInstances, scope),
-                ServiceLifetime.Singleton => GetInstance(descriptor, _singletonInstances, scope),
+                ServiceLifetime.Singleton => GetInstance(descriptor, _singletonInstances.ToDictionary(), scope),
                 _ => throw new ArgumentOutOfRangeException()
             };
         }
@@ -94,9 +95,9 @@ public class DIContainer
     
     private object CreateInstance(Type type, DIScope scope)
     {
-        if (_instanceTypes.Contains(type))
-            throw new InvalidOperationException($"Service of type {type.Name} has a cyclic dependency.");
-        _instanceTypes.Add(type);
+        // if (_instanceTypes.Contains(type))
+        //     throw new InvalidOperationException($"Service of type {type.Name} has a cyclic dependency.");
+        //_instanceTypes.Add(type);
         var ctor = type.GetConstructors()
             .OrderByDescending(c => c.GetParameters().Length)
             .First();

@@ -1,9 +1,13 @@
-﻿using TinyNet.ActionResult.Results;
+﻿using System.Collections.Concurrent;
+using TinyNet.ActionResult.Results;
+using TinyNet.Configurations;
 using TinyNet.Controllers;
 using TinyNet.DI;
 using TinyNet.Http;
 using TinyNet.Middlewares;
 using TinyNet.TaskResult;
+
+
 
 namespace TinyNet.Application;
 
@@ -12,22 +16,43 @@ public class WebApplication
     private NetHandler _handler;
     private MiddlewarePipeline _pipeline;
     private ControllerHandler _controllerHandler;
+    private IConfiguration _configuration;
+    private ConcurrentQueue<NetClient> _clients = new ConcurrentQueue<NetClient>();
     public WebApplication(
-        NetHandler handler, ControllerHandler controllerHandler, MiddlewarePipeline pipeline)
+        NetHandler handler, ControllerHandler controllerHandler, MiddlewarePipeline pipeline, IConfiguration configuration)
     {
         _handler = handler;
         _controllerHandler = controllerHandler;
         _pipeline = pipeline;
+        _configuration = configuration;
     }
 
+  
     public async Task Run()
+    {
+        Console.WriteLine($"Application started on http://localhost:{_configuration["Server:Port"]}");
+        var enqueueThread = new Thread(() => EnqueueClients())
+        {
+            IsBackground = true
+        };
+        enqueueThread.Start();
+        var workerTasks = new List<Task>();
+        int workerCount = Environment.ProcessorCount * 2 - 1; 
+        for (int i = 0; i < workerCount; i++)
+        {
+            workerTasks.Add(Task.Run(() => TryProcess()));
+        }
+        await Task.WhenAll(workerTasks);
+    }
+
+    private void EnqueueClients()
     {
         while (true)
         {
             try
             {
                 var client = _handler.Accept();
-                _ = Task.Run(async () => await ProcessClient(client));
+                _clients.Enqueue(client);
             }
             catch (Exception ex)
             {
@@ -35,7 +60,24 @@ public class WebApplication
             }
         }
     }
+    
+    private async Task TryProcess()
+    {
+        while (true)
+        {
+            if (_clients.TryDequeue(out var client))
+            {
+                await ProcessClient(client);
+            }
+            else
+            {
+                await Task.Delay(10);
+            }
+        }
+    }
 
+    
+    
     private async Task ProcessClient(NetClient client)
     {
         try
