@@ -56,7 +56,8 @@ public class AppBuilder
         return new WebApplication(
             _netHandler,
             _controllerHandler,
-            _pipeline
+            _pipeline,
+            _configBuilder.Build()
         );
     }
 }

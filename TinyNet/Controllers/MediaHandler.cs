@@ -1,4 +1,5 @@
-﻿using TinyNet.ActionResult;
+﻿using System.Text;
+using TinyNet.ActionResult;
 using TinyNet.ActionResult.Results;
 using TinyNet.Configurations;
 
@@ -42,6 +43,15 @@ public class MediaHandler : Controller
         if (!StaticContent.TryGetValue(extension, out string contentType))
             contentType = "application/octet-stream";
         byte[] fileData = await File.ReadAllBytesAsync(path);
-        return new Media(fileData, contentType);
+        if (contentType.StartsWith("text/") ||
+            contentType == "application/xml" ||
+            contentType == "application/json" ||
+            contentType == "application/javascript")
+            return new Media(Encoding.UTF8.GetString(fileData), contentType);
+        else
+        {
+            return new Media(Encoding.ASCII.GetString(fileData), contentType);
+        }
+        
     }
 }

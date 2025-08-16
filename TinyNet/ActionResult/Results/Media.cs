@@ -6,21 +6,20 @@ namespace TinyNet.ActionResult.Results;
 public class Media : ActionResult
 {
     
-    private readonly byte[] _fileData;
+    private readonly string _data;
     private readonly string _contentType;
 
-    public Media(byte[] fileData, string contentType) : base(200)
+    public Media(string Data, string contentType) : base(200)
     {
-        _fileData = fileData;
+        _data = Data;
         _contentType = contentType;
     }
     
     public override void ExecuteResult(ref HttpContext context)
     {
-        context.Response = new HttpResponse(_statusCode, Encoding.UTF8.GetString(_fileData));
+        context.Response = new HttpResponse(_statusCode, _data);
         context.Response.Headers.Add("Content-Type", _contentType);
-        context.Response.Headers.Add("Content-Length", _fileData.Length.ToString());
-        //context.Response.Headers.Add("Content-Encoding", "gzip");
+        context.Response.Headers.Add("Content-Length", _data.Length.ToString());
     }
     
 }

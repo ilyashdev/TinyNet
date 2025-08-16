@@ -5,6 +5,20 @@
     <title>Title</title>
 </head>
 <body>
-<h1>Tiny Net Static</h1>
+
+<button id="myButton">Нажми меня</button>
+<input type="text" id="myInput">
+
+<script>
+    const button = document.getElementById("myButton");
+    const input = document.getElementById("myInput");
+
+    button.addEventListener("click", function() {
+        const now = new Date();
+        const dateString = now.toLocaleDateString() + " " + now.toLocaleTimeString();
+        input.value = dateString;
+    });
+</script>
+
 </body>
 </html>
