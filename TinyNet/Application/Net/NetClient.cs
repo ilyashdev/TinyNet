@@ -21,11 +21,13 @@ public class NetClient : IDisposable
         return Http.Http.ParseRequest(request);
     }
 
-    public void SendResponse(HttpResponse response)
+    public async Task SendResponse(HttpResponse response)
     {
-        _clientSocket.Send(Encoding.UTF8.GetBytes(response.ToHttpResponse()));
+        await _clientSocket.SendAsync(Encoding.UTF8.GetBytes(response.ToHttpResponse()));
         _clientSocket.Shutdown(SocketShutdown.Both);
     }
+    
+    public bool IsConnected() => _clientSocket.Connected;
 
     public void Dispose()
     {

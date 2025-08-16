@@ -80,6 +80,7 @@ public class WebApplication
     
     private async Task ProcessClient(NetClient client)
     {
+        HttpResponse response = null;
         try
         {
             using (client)
@@ -90,14 +91,14 @@ public class WebApplication
                 var adapter = new MiddlewareControllerAdapter(_controllerHandler, scope);
                 try
                 {
-                    var controllerType  = _controllerHandler.GetTypeHandler(request.Url);
+                    var controllerType = _controllerHandler.GetTypeHandler(request.Url);
                     if (controllerType.Status != HandleResultStatus.Success)
                     {
                         new BadRequest(controllerType.Status).ExecuteResult(ref context);
                     }
                     else
                     {
-                        
+
                         await _pipeline.InvokeAsync(
                             context,
                             controllerType.Result,
@@ -105,21 +106,26 @@ public class WebApplication
                             adapter.InvokeAsync
                         );
                     }
-                    client.SendResponse(context.Response);
+                    response = context.Response;
                 }
                 catch (Exception ex)
                 {
                     Console.WriteLine($"Processing error: {ex.Message}");
                     new InternalError().ExecuteResult(ref context);
-                    client.SendResponse(context.Response);
+                    response = context.Response;
                 }
             }
         }
         catch (Exception ex)
         {
             Console.WriteLine($"Processing error: {ex.Message}");
-            var errorResponse = new HttpResponse(500,"Internal server error");
-            client.SendResponse(errorResponse);
+            var errorResponse = new HttpResponse(500, "Internal server error");
+            response = errorResponse;
+        }
+        finally
+        {
+            if(client.IsConnected())
+            await client.SendResponse(response);
         }
     }
 }
