@@ -2,6 +2,6 @@
 
 public class SingletonService
 {
-    public int Encounter { get; set; } = 0;
+    public int Encounter { get; set; } 
 
 }

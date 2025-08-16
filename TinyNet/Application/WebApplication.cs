@@ -80,12 +80,13 @@ public class WebApplication
     
     private async Task ProcessClient(NetClient client)
     {
-        HttpResponse response = null;
-        try
+        using (client)
+        using (DIScope scope = new())
         {
-            using (client)
-            using (DIScope scope = new())
+            HttpResponse response = null;
+            try
             {
+
                 HttpRequest request = await client.GetRequest();
                 HttpContext context = new(request, null);
                 var adapter = new MiddlewareControllerAdapter(_controllerHandler, scope);
@@ -106,6 +107,7 @@ public class WebApplication
                             adapter.InvokeAsync
                         );
                     }
+
                     response = context.Response;
                 }
                 catch (Exception ex)
@@ -114,18 +116,19 @@ public class WebApplication
                     new InternalError().ExecuteResult(ref context);
                     response = context.Response;
                 }
+
             }
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Processing error: {ex.Message}");
-            var errorResponse = new HttpResponse(500, "Internal server error");
-            response = errorResponse;
-        }
-        finally
-        {
-            if(client.IsConnected())
-            await client.SendResponse(response);
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Processing error: {ex.Message}");
+                var errorResponse = new HttpResponse(500, "Internal server error");
+                response = errorResponse;
+            }
+            finally
+            {
+                if (client.IsConnected())
+                    await client.SendResponse(response);
+            }
         }
     }
 }
