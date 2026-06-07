@@ -15,7 +15,9 @@ public class EnvironmentConfigurationProvider : IConfigurationProvider
             .Cast<DictionaryEntry>()
             .Where(e => _prefix == null || ((string)e.Key).StartsWith(_prefix))
             .ToDictionary(
-                e => ((string)e.Key).Replace("__", ":"), 
+                e =>  ((string)e.Key)                                                                                                                                                                                                                              
+                    .Substring(_prefix?.Length ?? 0)                                                                                                                                                                                                              
+                    .Replace("__", ":"), 
                 e => (string)e.Value);
     }
     

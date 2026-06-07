@@ -31,12 +31,18 @@ public class WebApplication
     public async Task Run()
     {
         Console.WriteLine($"Application started on http://localhost:{_configuration["Server:Port"]}");
-        int semaphoreCount = Environment.ProcessorCount * 2 - 1;
         var channel = Channel.CreateUnbounded<NetClient>();
         _ = Task.Run(async () =>                                                                                                                                                                                                                      
         {                                                                                                                                                                                                                                             
-            while (true)                                                                                                                                                                                                                              
-                await channel.Writer.WriteAsync(await _handler.AcceptAsync());                                                                                                                                                                        
+            while (true)
+                try
+                {
+                    await channel.Writer.WriteAsync(await _handler.AcceptAsync());
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Processing error: {ex.InnerException?.ToString() ?? ex.ToString()}");
+                }
         });  
         int workerCount = Environment.ProcessorCount * 2 - 1;                                                                                                                                                                                         
         var workers = Enumerable.Range(0, workerCount)                                                                                                                                                                                                
@@ -66,7 +72,7 @@ public class WebApplication
                     var controllerType = _controllerHandler.GetTypeHandler(request.Url);
                     if (controllerType.Status != HandleResultStatus.Success)
                     {
-                        new BadRequest(controllerType.Status).ExecuteResult(ref context);
+                        new BadRequest(controllerType.Status).ExecuteResult(context);
                     }
                     else
                     {
@@ -84,7 +90,7 @@ public class WebApplication
                 catch (Exception ex)
                 {
                     Console.WriteLine($"Processing error: {ex.InnerException?.ToString() ?? ex.ToString()}");
-                    new InternalError().ExecuteResult(ref context);
+                    new InternalError().ExecuteResult(context);
                     response = context.Response;
                 }
 

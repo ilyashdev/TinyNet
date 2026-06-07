@@ -5,7 +5,7 @@ namespace TinyNet.Http;
 public class HttpResponse
 {
     
-    
+    public byte[]? BinaryBody { get; set; }     
     public int? StatusCode { get; set; }
     public Dictionary<string, string> Headers { get; set; }
     public string? Body { get; set; }
@@ -39,6 +39,28 @@ public class HttpResponse
         StatusCode = statusCode;
         Headers = new();
     }
+    public byte[] ToHttpResponseBytes()                                                                                                                                                                                                               
+    {                                                                                                                                                                                                                                                 
+        if (StatusCode == null)                                                                                                                                                                                                                       
+            throw new InvalidOperationException("HTTP status code is required");                                                                                                                                                                      
+                                                                                                                                                                                                                                                      
+        string statusText = StatusTexts.TryGetValue(StatusCode.Value, out string text) ? text : "Unknown Status";                                                                                                                                     
+                                                                                                                                                                                                                                                      
+        if (!Headers.ContainsKey("Content-Length"))                                                                                                                                                                                                   
+            Headers["Content-Length"] = (BinaryBody?.Length ?? 0).ToString();                                                                                                                                                                         
+                                                                                                                                                                                                                                                      
+        var header = new StringBuilder();                                                                                                                                                                                                             
+        header.Append($"HTTP/1.1 {StatusCode} {statusText}\r\n");                                                                                                                                                                                     
+        foreach (var h in Headers)                                                                                                                                                                                                                    
+            header.Append($"{h.Key}: {h.Value}\r\n");                                                                                                                                                                                                 
+        header.Append("\r\n");                                                                                                                                                                                                                        
+                                                                                                                                                                                                                                                      
+        var headerBytes = Encoding.UTF8.GetBytes(header.ToString());                                                                                                                                                                                  
+        var result = new byte[headerBytes.Length + (BinaryBody?.Length ?? 0)];                                                                                                                                                                        
+        headerBytes.CopyTo(result, 0);                                                                                                                                                                                                                
+        BinaryBody?.CopyTo(result, headerBytes.Length);                                                                                                                                                                                               
+        return result;                                                                                                                                                                                                                                
+    }      
 
     public string ToHttpResponse()
     {
@@ -49,7 +71,7 @@ public class HttpResponse
             : "Unknown Status";
         
         var response = new StringBuilder();
-        response.AppendLine($"HTTP/1.1 {StatusCode} {statusText}");
+        response.Append($"HTTP/1.1 {StatusCode} {statusText}").Append("\r\n");
         if (!Headers.ContainsKey("Content-Length"))
         {
             int length = Body?.Length > 0
@@ -57,12 +79,14 @@ public class HttpResponse
                 : 0;
             Headers["Content-Length"] = length.ToString();
         }
+        
+        
 
         foreach (var header in Headers)
         {
-            response.AppendLine($"{header.Key}: {header.Value}");
+            response.Append($"{header.Key}: {header.Value}").Append("\r\n");
         }
-        response.AppendLine();
+        response.Append("\r\n");
         if (!string.IsNullOrEmpty(Body))
         {
             response.Append(Body);

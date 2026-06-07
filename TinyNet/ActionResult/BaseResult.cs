@@ -14,7 +14,7 @@ public class BaseResult : ActionResult
     {
         _data = data;
     }
-    public override void ExecuteResult(ref HttpContext context)
+    public override void ExecuteResult(HttpContext context)
     {
         if (_data != null)
         {

@@ -2,24 +2,28 @@
 using TinyNet.Http;
 
 namespace TinyNet.ActionResult.Results;
-
-public class Media : ActionResult
-{
-    
-    private readonly string _data;
-    private readonly string _contentType;
-
-    public Media(string Data, string contentType) : base(200)
-    {
-        _data = Data;
-        _contentType = contentType;
-    }
-    
-    public override void ExecuteResult(ref HttpContext context)
-    {
-        context.Response = new HttpResponse(_statusCode, _data);
-        context.Response.Headers.Add("Content-Type", _contentType);
-        context.Response.Headers.Add("Content-Length", _data.Length.ToString());
-    }
-    
-}
+ public class Media : ActionResult                                                                                                                                                                                                                 
+  {                                                                                                                                                                                                                                                 
+      private readonly string? _text;                                                                                                                                                                                                               
+      private readonly byte[]? _binary;                                                                                                                                                                                                             
+      private readonly string _contentType;                                                                                                                                                                                                         
+                                                                                                                                                                                                                                                    
+      public Media(string data, string contentType) : base(200) { _text = data; _contentType = contentType; }                                                                                                                                       
+      public Media(byte[] data, string contentType) : base(200) { _binary = data; _contentType = contentType; }                                                                                                                                     
+                                                                                                                                                                                                                                                    
+      public override void ExecuteResult(HttpContext context)                                                                                                                                                                                   
+      {                                                                                                                                                                                                                                             
+          if (_binary != null)                                                                                                                                                                                                                      
+          {                                                                                                                                                                                                                                         
+              context.Response = new HttpResponse(_statusCode);                                                                                                                                                                                     
+              context.Response.BinaryBody = _binary;                                                                                                                                                                                                
+              context.Response.Headers["Content-Type"] = _contentType;                                                                                                                                                                              
+          }                                                                                                                                                                                                                                         
+          else                                                                                                                                                                                                                                      
+          {                                                                                                                                                                                                                                         
+              context.Response = new HttpResponse(_statusCode, _text);                                                                                                                                                                              
+              context.Response.Headers["Content-Type"] = _contentType;                                                                                                                                                                              
+          }                                                                                                                                                                                                                                         
+      }                                                                                                                                                                                                                                             
+  }                                                                                                                                                                                                                                                 
+            

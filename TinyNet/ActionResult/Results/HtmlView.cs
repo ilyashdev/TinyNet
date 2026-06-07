@@ -10,7 +10,7 @@ public class HtmlView : ActionResult
         _htmlContent = htmlContent;
     }
 
-    public override void ExecuteResult(ref HttpContext context)
+    public override void ExecuteResult(HttpContext context)
     {
             context.Response = new HttpResponse(200, _htmlContent);
             context.Response.Headers.Add("Content-Type", "text/html; charset=utf-8");

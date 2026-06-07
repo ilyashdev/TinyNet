@@ -27,12 +27,15 @@ public class NetClient : IDisposable
         return Http.Http.ParseRequest(request);
     }
 
-    public async Task SendResponse(HttpResponse response)
-    {
-        await _clientSocket.SendAsync(Encoding.UTF8.GetBytes(response.ToHttpResponse()));
-        _clientSocket.Shutdown(SocketShutdown.Both);
-    }
-    
+    public async Task SendResponse(HttpResponse response)                                                                                                                                                                                             
+    {                                                                                                                                                                                                                                                 
+        var data = response.BinaryBody != null                                                                                                                                                                                                        
+            ? response.ToHttpResponseBytes()                                                                                                                                                                                                          
+            : Encoding.UTF8.GetBytes(response.ToHttpResponse());                                                                                                                                                                                      
+        await _clientSocket.SendAsync(data);                                                                                                                                                                                                          
+        _clientSocket.Shutdown(SocketShutdown.Both);                                                                                                                                                                                                  
+    } 
+    //наверное когданибудь пригодиться
     public async Task SendOverloadedResponse()                                                                                                                                                                                                        
     {                                                                                                                                                                                                                                                 
         var response = new HttpResponse(503, "Service Unavailable");                                                                                                                                                                                  

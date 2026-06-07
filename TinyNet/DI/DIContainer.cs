@@ -1,6 +1,5 @@
-﻿
-
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
+using System.Linq.Expressions;
 using TinyNet.Middlewares;
 
 namespace TinyNet.DI;
@@ -8,23 +7,35 @@ namespace TinyNet.DI;
 public class DIContainer
 {
     private readonly ConcurrentDictionary<Type, object> _singletonInstances = new();
-    private readonly ConcurrentBag<ServiceDescriptor> _descriptors = new(); 
+    private readonly ConcurrentDictionary<Type, ServiceDescriptor> _descriptors = new(); 
+    private readonly ConcurrentDictionary<Type, Func<object[], object>> _factories = new();    
 
-    public void AddTransient<TService, TImplementation>() where TImplementation : TService
-        => Register<TService, TImplementation>(ServiceLifetime.Transient);
-
-    public void AddTransient<TImplementation>()
-        => Register<TImplementation, TImplementation>(ServiceLifetime.Transient);
-    
-    public void AddScoped<TService, TImplementation>() where TImplementation : TService
-        => Register<TService, TImplementation>(ServiceLifetime.Scoped);
-    public void AddScoped<TImplementation>()
-        => Register<TImplementation, TImplementation>(ServiceLifetime.Scoped);
-    
-    public void AddSingleton<TService, TImplementation>() where TImplementation : TService
-        => Register<TService, TImplementation>(ServiceLifetime.Singleton);
-    public void AddSingleton<TImplementation>()
-        => Register<TImplementation, TImplementation>(ServiceLifetime.Singleton);
+  public void AddTransient<TService, TImplementation>() where TImplementation : TService                                                                                                                                                            
+      => AddTransient(typeof(TService), typeof(TImplementation));                                                                                                                                                                                   
+  public void AddTransient<TImplementation>()                                                                                                                                                                                                       
+      => AddTransient(typeof(TImplementation), typeof(TImplementation));                                                                                                                                                                            
+  public void AddTransient(Type type)                                                                                                                                                                                                               
+      => AddTransient(type, type);                                                                                                                                                                                                                  
+  public void AddTransient(Type serviceType, Type implementationType)                                                                                                                                                                               
+      => Register(serviceType, implementationType, ServiceLifetime.Transient);                                                                                                                                                                      
+                                                                                                                                                                                                                                                    
+  public void AddScoped<TService, TImplementation>() where TImplementation : TService                                                                                                                                                               
+      => AddScoped(typeof(TService), typeof(TImplementation));                                                                                                                                                                                      
+  public void AddScoped<TImplementation>()                                                                                                                                                                                                          
+      => AddScoped(typeof(TImplementation), typeof(TImplementation));                                                                                                                                                                               
+  public void AddScoped(Type type)                                                                                                                                                                                                                  
+      => AddScoped(type, type);                                                                                                                                                                                                                     
+  public void AddScoped(Type serviceType, Type implementationType)                                                                                                                                                                                  
+      => Register(serviceType, implementationType, ServiceLifetime.Scoped);                                                                                                                                                                         
+                                                                                                                                                                                                                                                    
+  public void AddSingleton<TService, TImplementation>() where TImplementation : TService                                                                                                                                                            
+      => AddSingleton(typeof(TService), typeof(TImplementation));                                                                                                                                                                                   
+  public void AddSingleton<TImplementation>()                                                                                                                                                                                                       
+      => AddSingleton(typeof(TImplementation), typeof(TImplementation));                                                                                                                                                                            
+  public void AddSingleton(Type type)                                                                                                                                                                                                               
+      => AddSingleton(type, type);                                                                                                                                                                                                                  
+  public void AddSingleton(Type serviceType, Type implementationType)                                                                                                                                                                               
+      => Register(serviceType, implementationType, ServiceLifetime.Singleton);   
 
     public void AddInstance<TService>(TService instance)
     {
@@ -33,19 +44,23 @@ public class DIContainer
     }
 
     private void Register<TService, TImplementation>(ServiceLifetime lifetime)
+    => Register(typeof(TService), typeof(TImplementation), lifetime);
+    
+    private void Register(Type serviceType, Type implementationType,ServiceLifetime lifetime)
     {
-        if(_descriptors.Where(c => c.ServiceType == typeof(TService)).Any())
-            throw new Exception($"Service type {typeof(TService)} is already registered");
-        _descriptors.Add(new ServiceDescriptor(typeof(TService), typeof(TImplementation), lifetime));
+        if(_descriptors.ContainsKey(serviceType))
+            throw new Exception($"Service type {serviceType} is already registered");
+        _descriptors[serviceType] = new ServiceDescriptor(serviceType, implementationType, lifetime);
     }
-
-
+    
     public TService GetService<TService>(DIScope scope) 
         => (TService)GetService(typeof(TService), scope, new());
+    public Object GetService(Type serviceType, DIScope scope) 
+        => GetService(serviceType, scope, new());
 
     private object GetService(Type serviceType, DIScope scope, HashSet<Type> resolving)
     {
-        var descriptor = _descriptors.FirstOrDefault(d => d.ServiceType == serviceType)
+        var descriptor = _descriptors[serviceType]
                          ?? throw new InvalidOperationException($"Service {serviceType.Name} not registered");
             return descriptor.Lifetime switch
             {
@@ -73,30 +88,38 @@ public class DIContainer
         return (Middleware)ctor.Invoke(parameters);
     }
 
-    internal object GetInstance(ServiceDescriptor descriptor,  IDictionary<Type, object> instances, DIScope scope, HashSet<Type> resolving)
-    {
-        if (!instances.ContainsKey(descriptor.ServiceType))
-        {
-            var instance = CreateInstance(descriptor.ImplementationType, scope, resolving);
-            instances.Add(descriptor.ServiceType, instance);
-            return instance;
-        }
-         return instances[descriptor.ServiceType];
-    }
+    internal object GetInstance(ServiceDescriptor descriptor, IDictionary<Type, object> instances, DIScope scope, HashSet<Type> resolving)                                                                                                            
+    {                                                                                                                                                                                                                                                 
+        if (instances is ConcurrentDictionary<Type, object> concurrent)                                                                                                                                                                               
+            return concurrent.GetOrAdd(descriptor.ServiceType,                                                                                                                                                                                        
+                _ => CreateInstance(descriptor.ImplementationType, scope, resolving));                                                                                                                                                                
+                                                                                                                                                                                                                                                      
+        if (!instances.TryGetValue(descriptor.ServiceType, out var existing))                                                                                                                                                                         
+        {                                                                                                                                                                                                                                             
+            existing = CreateInstance(descriptor.ImplementationType, scope, resolving);                                                                                                                                                               
+            instances[descriptor.ServiceType] = existing;                                                                                                                                                                                             
+        }                                                                                                                                                                                                                                             
+        return existing;                                                                                                                                                                                                                              
+    }  
     
     private object CreateInstance(Type type, DIScope scope, HashSet<Type> resolving)
     {
-        if (!resolving.Add(type))
-             throw new InvalidOperationException($"Service of type {type.Name} has a cyclic dependency.");
-        var ctor = type.GetConstructors()
-            .OrderByDescending(c => c.GetParameters().Length)
-            .First();
-
+        var factory = _factories.GetOrAdd(type, BuildFactory);
+        var ctor = type.GetConstructors().OrderByDescending(c => c.GetParameters().Length).First();
         var parameters = ctor.GetParameters()
             .Select(p => GetService(p.ParameterType, scope, resolving))
             .ToArray();
+        return factory(parameters);
+    }
 
-        return Activator.CreateInstance(type, parameters)!;
+    private static Func<object[], object> BuildFactory(Type type)
+    {
+        var ctor = type.GetConstructors().OrderByDescending(c => c.GetParameters().Length).First();
+        var param = Expression.Parameter(typeof(object[]), "args");
+        var ctorParams = ctor.GetParameters().Select((p, i) =>
+            Expression.Convert(Expression.ArrayIndex(param, Expression.Constant(i)), p.ParameterType));
+        var newExpr = Expression.New(ctor, ctorParams);
+        return Expression.Lambda<Func<object[], object>>(Expression.Convert(newExpr, typeof(object)), param).Compile();
     }
     
 }

@@ -2,15 +2,16 @@
 
 public static class HttpMethod
 {
-private static List<string> _allowMethod = new List<string>()
+private static readonly HashSet<string>  AllowMethod = new()
 {
     "GET",
     "POST",
     "DELETE",
     "HEAD",
     "OPTIONS",
-    "PATCH"
+    "PATCH",
+    "PUT"
 };
-public static bool IsAllowed(string method) => _allowMethod.Contains(method);
+public static bool IsAllowed(string method) => AllowMethod.Contains(method);
 
 }

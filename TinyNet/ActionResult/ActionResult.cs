@@ -23,7 +23,7 @@ public abstract class ActionResult : IActionResult
         _statusCode = statusCode;
     }
     
-    public virtual void ExecuteResult(ref HttpContext context)
+    public virtual void ExecuteResult(HttpContext context)
     {
         context.Response = new HttpResponse(_statusCode);
     }

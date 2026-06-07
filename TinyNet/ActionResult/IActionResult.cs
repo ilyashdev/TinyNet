@@ -5,5 +5,5 @@ namespace TinyNet.ActionResult;
 
 public interface IActionResult
 { 
-    void ExecuteResult(ref HttpContext context);
+    void ExecuteResult(HttpContext context);
 }

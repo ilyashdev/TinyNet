@@ -41,21 +41,16 @@ public class ControllerHandler
             })
             .Where(t => t.IsSubclassOf(typeof(Controller)) && !t.IsAbstract)
             .ToList();
-        var transientMethodInfo = typeof(DIContainer)
-            .GetMethods()
-            .First(m => m.Name == "AddTransient" && 
-                        m.GetGenericArguments().Length == 1 &&
-                        m.GetParameters().Length == 0);
-        var serviceMethodInfo = typeof(DIContainer).GetMethod("GetService");
         foreach (var controllerType in controllerTypes)
         {
             if(controllerType.CustomAttributes.Any(a => a.AttributeType == typeof(NotMappedAttribute)))
                 continue;
-            transientMethodInfo
-                .MakeGenericMethod(controllerType)
-                .Invoke(_container, null);
+            var route = controllerType.GetCustomAttribute<RouteAttribute>()?.Url ??
+                        throw new InvalidOperationException(
+                            $"Controller {controllerType.Name} is missing [Route] attribute");
+            _container.AddTransient(controllerType);
             _controllers.Add(
-                controllerType.GetCustomAttribute<RouteAttribute>().Url ?? throw new InvalidOperationException($"Controller {controllerType.Name} is missing [Route] attribute"), 
+                route, 
                 controllerType
                 );
         }
@@ -70,23 +65,20 @@ public class ControllerHandler
         return new HandleResult<Type>(type);
     }
 
-    public Controller? GetController(string url, DIScope scope)
-    {
-        var serviceMethodInfo = typeof(DIContainer).GetMethod("GetService");
-        var type = GetTypeHandler(url);
-        if(type.Status != HandleResultStatus.Success)
-            return null;
-        return (Controller)serviceMethodInfo
-            .MakeGenericMethod(type.Result)
-            .Invoke(_container, [scope]);
-    }
+     public Controller? GetController(string url, DIScope scope)                                                                                                                                                                                       
+  {                                                                                                                                                                                                                                                 
+      var type = GetTypeHandler(url);                                                                                                                                                                                                               
+      if (type.Status != HandleResultStatus.Success)                                                                                                                                                                                                
+          return null;                                                                                                                                                                                                                              
+      return (Controller)_container.GetService(type.Result, scope);                                                                                                                                                                                 
+  }  
 
     public async Task Handle(HttpContext httpContext, DIScope scope)
     {
         Controller controller = GetController(httpContext.Request.Url, scope);
         if (controller == null)
         {
-            new BadRequest("Not Found endpoint").ExecuteResult(ref httpContext);
+            new BadRequest("Not Found endpoint").ExecuteResult(httpContext);
             return;
         };
         controller.SetContext(httpContext);
@@ -103,7 +95,7 @@ public class ControllerHandler
             throw new Exception("Multiple HTTP methods found");
         if (methods.Count() == 0)
         { 
-            new BadRequest("No HTTP method handler").ExecuteResult(ref httpContext);
+            new BadRequest("No HTTP method handler").ExecuteResult(httpContext);
             return;
         }
         var method = methods.First();
@@ -118,7 +110,7 @@ public class ControllerHandler
                 var arg = JsonSerializer.Deserialize(body[param.Name], param.ParameterType);
                 if (arg == null)
                 {
-                    new BadRequest($"No body argument found -- {param.Name}").ExecuteResult(ref httpContext);
+                    new BadRequest($"No body argument found -- {param.Name}").ExecuteResult(httpContext);
                     return;
                 };
                 args[param.Position] = arg;
@@ -128,7 +120,7 @@ public class ControllerHandler
                 query.TryGetValue(param.Name,out arg);
                 if (arg == null)
                 {
-                    new BadRequest($"No query argument found -- {param.Name}").ExecuteResult(ref httpContext);
+                    new BadRequest($"No query argument found -- {param.Name}").ExecuteResult(httpContext);
                     return;
                 };
                 args[param.Position] = arg;
@@ -142,13 +134,16 @@ public class ControllerHandler
                 await taskResult.ConfigureAwait(false);
                 if (taskResult.GetType().IsGenericType)
                 {
-                    ((Task<IActionResult>)taskResult).Result.ExecuteResult(ref httpContext);
-                    return;
+                    var resultValue = (IActionResult)taskResult.GetType()                                                                                                                                                                                         
+                        .GetProperty("Result")!                                                                                                                                                                                                                   
+                        .GetValue(taskResult)!;                                                                                                                                                                                                                    
+                    resultValue.ExecuteResult(httpContext);                                                                                                                                                                                                   
+                    return; 
                 }
-                new Ok("").ExecuteResult(ref httpContext);
+                new Ok("").ExecuteResult(httpContext);
                 return;
             }
-            ((IActionResult)result).ExecuteResult(ref httpContext);
+            ((IActionResult)result).ExecuteResult(httpContext);
             return;
         }
         catch (TargetInvocationException ex)

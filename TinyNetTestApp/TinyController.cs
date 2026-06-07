@@ -14,7 +14,7 @@ public class TinyController : Controller
 
     public SingletonService SingletonService {get; set;}
     [HttpMethod("GET")]
-    public IActionResult Index()
+    public async Task<IActionResult> Index()
     {
         return new HtmlView($"<h1>TinyNet {SingletonService.Encounter++}</h1>");
     }
