@@ -13,12 +13,12 @@ public class NetHandler
         _socket.ReceiveTimeout = 5000;
         _socket.SendTimeout = 5000;
         _socket.Bind(ipEndPoint);
-        _socket.Listen(100);
+        _socket.Listen(1000);
         
     }
 
-    public NetClient Accept()
+    public async Task<NetClient> AcceptAsync()
     {
-        return new NetClient(_socket.Accept());
+        return new NetClient(await _socket.AcceptAsync());
     } 
 }

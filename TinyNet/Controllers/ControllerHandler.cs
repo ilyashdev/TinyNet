@@ -55,7 +55,7 @@ public class ControllerHandler
                 .MakeGenericMethod(controllerType)
                 .Invoke(_container, null);
             _controllers.Add(
-                controllerType.GetCustomAttribute<RouteAttribute>().Url, 
+                controllerType.GetCustomAttribute<RouteAttribute>().Url ?? throw new InvalidOperationException($"Controller {controllerType.Name} is missing [Route] attribute"), 
                 controllerType
                 );
         }

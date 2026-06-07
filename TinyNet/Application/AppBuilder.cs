@@ -57,7 +57,7 @@ public class AppBuilder
             _netHandler,
             _controllerHandler,
             _pipeline,
-            _configBuilder.Build()
+            conf
         );
     }
 }

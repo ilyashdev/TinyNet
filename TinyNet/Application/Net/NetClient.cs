@@ -14,10 +14,16 @@ public class NetClient : IDisposable
     }
 
     public async Task<HttpRequest> GetRequest()
-    {
-        var buffer = new byte[_clientSocket.ReceiveBufferSize];
-        var received = await _clientSocket.ReceiveAsync(buffer);
-        var request = Encoding.ASCII.GetString(buffer, 0, received);
+    { 
+        using var ms = new MemoryStream();                                                                                                                                                                                                            
+        var buffer = new byte[4096]; 
+        int received; 
+        do 
+        {                                                                                                                                                                                                                                             
+          received = await _clientSocket.ReceiveAsync(buffer);                                                                                                                                                                                      
+          ms.Write(buffer, 0, received); 
+        } while (received == buffer.Length && _clientSocket.Available > 0);
+        var request = Encoding.UTF8.GetString(ms.ToArray());  
         return Http.Http.ParseRequest(request);
     }
 
@@ -27,10 +33,19 @@ public class NetClient : IDisposable
         _clientSocket.Shutdown(SocketShutdown.Both);
     }
     
+    public async Task SendOverloadedResponse()                                                                                                                                                                                                        
+    {                                                                                                                                                                                                                                                 
+        var response = new HttpResponse(503, "Service Unavailable");                                                                                                                                                                                  
+        await _clientSocket.SendAsync(Encoding.UTF8.GetBytes(response.ToHttpResponse()));                                                                                                                                                             
+        _clientSocket.Shutdown(SocketShutdown.Both);                                                                                                                                                                                                  
+    }  
+    
     public bool IsConnected() => _clientSocket.Connected;
 
     public void Dispose()
     {
         _clientSocket.Dispose();
     }
+    
+    
 }
