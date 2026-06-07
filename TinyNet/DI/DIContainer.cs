@@ -9,7 +9,10 @@ public class DIContainer
     private readonly ConcurrentDictionary<Type, object> _singletonInstances = new();
     private readonly ConcurrentDictionary<Type, ServiceDescriptor> _descriptors = new(); 
     private readonly ConcurrentDictionary<Type, Func<object[], object>> _factories = new();    
-
+    private readonly ConcurrentDictionary<Type, Type[]> _ctorParams = new();
+    private record MiddlewareParamMeta(int Index, bool IsDelegate, Type? ServiceType);                                                                                                                                                                
+    private record MiddlewareMeta(Func<object[], object> Factory, MiddlewareParamMeta[] Params);                                                                                                                                                      
+    private readonly ConcurrentDictionary<Type, MiddlewareMeta> _middlewareMeta = new(); 
   public void AddTransient<TService, TImplementation>() where TImplementation : TService                                                                                                                                                            
       => AddTransient(typeof(TService), typeof(TImplementation));                                                                                                                                                                                   
   public void AddTransient<TImplementation>()                                                                                                                                                                                                       
@@ -52,16 +55,14 @@ public class DIContainer
             throw new Exception($"Service type {serviceType} is already registered");
         _descriptors[serviceType] = new ServiceDescriptor(serviceType, implementationType, lifetime);
     }
-    
-    public TService GetService<TService>(DIScope scope) 
-        => (TService)GetService(typeof(TService), scope, new());
     public Object GetService(Type serviceType, DIScope scope) 
         => GetService(serviceType, scope, new());
 
     private object GetService(Type serviceType, DIScope scope, HashSet<Type> resolving)
     {
-        var descriptor = _descriptors[serviceType]
-                         ?? throw new InvalidOperationException($"Service {serviceType.Name} not registered");
+        if (!_descriptors.TryGetValue(serviceType, out var descriptor))                                                                                                                                                                                   
+            throw new InvalidOperationException($"Service {serviceType.Name} not registered");                                                                                                                                                            
+
             return descriptor.Lifetime switch
             {
                 ServiceLifetime.Transient => CreateInstance(descriptor.ImplementationType, scope,resolving),
@@ -70,23 +71,34 @@ public class DIContainer
                 _ => throw new ArgumentOutOfRangeException()
             };
     }
-
-    internal Middleware GetMiddleware(Type middlewareType,RequestDelegate next, DIScope scope)
-    {
-        var ctor = middlewareType.GetConstructors()
-            .OrderByDescending(c => c.GetParameters().Length)
-            .First();
-        var paramsInfo = ctor.GetParameters();
-        var parameters = new object[paramsInfo.Length];
-        for (int i = 0; i < paramsInfo.Length; i++)
-        {
-            if (paramsInfo[i].ParameterType == typeof(RequestDelegate))
-                parameters[i] = next;
-            else
-                parameters[i] = GetService(paramsInfo[i].ParameterType, scope, new());
-        }
-        return (Middleware)ctor.Invoke(parameters);
-    }
+    internal Middleware GetMiddleware(Type middlewareType, RequestDelegate next, DIScope scope)                                                                                                                                                       
+    {                                                                                                                                                                                                                                                 
+        var meta = _middlewareMeta.GetOrAdd(middlewareType, BuildMiddlewareMeta);                                                                                                                                                                     
+        var parameters = new object[meta.Params.Length];                                                                                                                                                                                              
+        foreach (var p in meta.Params)                                                                                                                                                                                                                
+            parameters[p.Index] = p.IsDelegate ? next : GetService(p.ServiceType!, scope, new());                                                                                                                                                     
+        return (Middleware)meta.Factory(parameters);                                                                                                                                                                                                  
+    }                                                                                                                                                                                                                                                 
+                                                                                                                                                                                                                                                      
+    private static MiddlewareMeta BuildMiddlewareMeta(Type middlewareType)                                                                                                                                                                            
+    {                                                                                                                                                                                                                                                 
+        var ctor = middlewareType.GetConstructors()                                                                                                                                                                                                   
+            .OrderByDescending(c => c.GetParameters().Length)                                                                                                                                                                                         
+            .First();                                                                                                                                                                                                                                 
+        var paramsInfo = ctor.GetParameters();                                                                                                                                                                                                        
+        var paramMetas = paramsInfo.Select((p, i) => new MiddlewareParamMeta(                                                                                                                                                                         
+            i,                                                                                                                                                                                                                                        
+            p.ParameterType == typeof(RequestDelegate),                                                                                                                                                                                               
+            p.ParameterType != typeof(RequestDelegate) ? p.ParameterType : null)).ToArray();                                                                                                                                                          
+                                                                                                                                                                                                                                                      
+        var param = Expression.Parameter(typeof(object[]), "args");                                                                                                                                                                                   
+        var ctorParams = paramsInfo.Select((p, i) =>                                                                                                                                                                                                  
+            Expression.Convert(Expression.ArrayIndex(param, Expression.Constant(i)), p.ParameterType));                                                                                                                                               
+        var factory = Expression.Lambda<Func<object[], object>>(                                                                                                                                                                                      
+            Expression.Convert(Expression.New(ctor, ctorParams), typeof(object)), param).Compile();                                                                                                                                                   
+                                                                                                                                                                                                                                                      
+        return new MiddlewareMeta(factory, paramMetas);                                                                                                                                                                                               
+    }  
 
     internal object GetInstance(ServiceDescriptor descriptor, IDictionary<Type, object> instances, DIScope scope, HashSet<Type> resolving)                                                                                                            
     {                                                                                                                                                                                                                                                 
@@ -101,16 +113,15 @@ public class DIContainer
         }                                                                                                                                                                                                                                             
         return existing;                                                                                                                                                                                                                              
     }  
-    
-    private object CreateInstance(Type type, DIScope scope, HashSet<Type> resolving)
-    {
-        var factory = _factories.GetOrAdd(type, BuildFactory);
-        var ctor = type.GetConstructors().OrderByDescending(c => c.GetParameters().Length).First();
-        var parameters = ctor.GetParameters()
-            .Select(p => GetService(p.ParameterType, scope, resolving))
-            .ToArray();
-        return factory(parameters);
-    }
+    private object CreateInstance(Type type, DIScope scope, HashSet<Type> resolving)                                                                                                                                                                  
+    {                                                                                                                                                                                                                                                 
+        var factory = _factories.GetOrAdd(type, BuildFactory);                                                                                                                                                                                        
+        var paramTypes = _ctorParams.GetOrAdd(type, t => t.GetConstructors()                                                                                                                                                                          
+            .OrderByDescending(c => c.GetParameters().Length)                                                                                                                                                                                         
+            .First().GetParameters().Select(p => p.ParameterType).ToArray());                                                                                                                                                                         
+        var parameters = paramTypes.Select(p => GetService(p, scope, resolving)).ToArray();                                                                                                                                                           
+        return factory(parameters);                                                                                                                                                                                                                   
+    }   
 
     private static Func<object[], object> BuildFactory(Type type)
     {
