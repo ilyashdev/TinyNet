@@ -34,9 +34,9 @@ public class ControllerHandler
                 {
                     return assembly.GetTypes();
                 }
-                catch (ReflectionTypeLoadException)
+                catch (ReflectionTypeLoadException ex)
                 {
-                    return Array.Empty<Type>();
+                    return ex.Types.Where(t => t != null)!;
                 }
             })
             .Where(t => t.IsSubclassOf(typeof(Controller)) && !t.IsAbstract)
@@ -65,13 +65,13 @@ public class ControllerHandler
         return new HandleResult<Type>(type);
     }
 
-     public Controller? GetController(string url, DIScope scope)                                                                                                                                                                                       
-  {                                                                                                                                                                                                                                                 
-      var type = GetTypeHandler(url);                                                                                                                                                                                                               
-      if (type.Status != HandleResultStatus.Success)                                                                                                                                                                                                
-          return null;                                                                                                                                                                                                                              
-      return (Controller)_container.GetService(type.Result, scope);                                                                                                                                                                                 
-  }  
+       public Controller? GetController(string url, DIScope scope)                                                                                                                                                                                       
+    {                                                                                                                                                                                                                                                 
+        var type = GetTypeHandler(url);                                                                                                                                                                                                               
+        if (type.Status != HandleResultStatus.Success)                                                                                                                                                                                                
+            return null;                                                                                                                                                                                                                              
+        return (Controller)_container.GetService(type.Result, scope);                                                                                                                                                                                 
+    }  
 
     public async Task Handle(HttpContext httpContext, DIScope scope)
     {
@@ -116,14 +116,14 @@ public class ControllerHandler
                 args[param.Position] = arg;
             }else if (param.GetCustomAttribute<FromQueryAttribute>() != null)
             {
-                string? arg;
+                string arg;
                 query.TryGetValue(param.Name,out arg);
                 if (arg == null)
                 {
                     new BadRequest($"No query argument found -- {param.Name}").ExecuteResult(httpContext);
                     return;
                 };
-                args[param.Position] = arg;
+                args[param.Position] = JsonSerializer.Deserialize(arg, param.ParameterType);
             }
         }
         try

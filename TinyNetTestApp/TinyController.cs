@@ -1,4 +1,5 @@
-﻿using TinyNet.ActionResult;
+﻿using System.Text;
+using TinyNet.ActionResult;
 using TinyNet.ActionResult.Results;
 using TinyNet.Controllers;
 
@@ -17,5 +18,16 @@ public class TinyController : Controller
     public async Task<IActionResult> Index()
     {
         return new HtmlView($"<h1>TinyNet {SingletonService.Encounter++}</h1>");
+    }
+    [HttpMethod("POST")]
+    public async Task<IActionResult> Post([FromQuery]int count)
+    {
+        List<int> ints = new List<int>(count);
+        while (count > 0)
+        {
+            ints.Add(Random.Shared.Next());
+            count--;
+        }
+        return new Ok(ints);
     }
 }

@@ -13,10 +13,10 @@ namespace TinyNet.Application;
 
 public class WebApplication
 {
-    private NetHandler _handler;
-    private MiddlewarePipeline _pipeline;
-    private ControllerHandler _controllerHandler;
-    private IConfiguration _configuration;
+    private readonly NetHandler _handler;
+    private readonly MiddlewarePipeline _pipeline;
+    private readonly ControllerHandler _controllerHandler;
+    private readonly IConfiguration _configuration;
     public WebApplication(
         NetHandler handler, ControllerHandler controllerHandler, MiddlewarePipeline pipeline, IConfiguration configuration)
     {
@@ -31,27 +31,30 @@ public class WebApplication
     {
         Console.WriteLine($"Application started on http://localhost:{_configuration["Server:Port"]}");
         var channel = Channel.CreateUnbounded<NetClient>();
-        _ = Task.Run(async () =>                                                                                                                                                                                                                      
-        {                                                                                                                                                                                                                                             
-            while (true)
-                try
-                {
-                    await channel.Writer.WriteAsync(await _handler.AcceptAsync());
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"Processing error: {ex.InnerException?.ToString() ?? ex.ToString()}");
-                }
-        });  
+        var acceptLoop = AcceptLoop(channel);
         int workerCount = Environment.ProcessorCount * 2 - 1;                                                                                                                                                                                         
         var workers = Enumerable.Range(0, workerCount)                                                                                                                                                                                                
-            .Select(_ => Task.Run(async () =>                                                                                                                                                                                                         
-            {                                                                                                                                                                                                                                         
-                await foreach (var client in channel.Reader.ReadAllAsync())                                                                                                                                                                           
-                    await ProcessClient(client);                                                                                                                                                                                                      
-            }));                                                                                                                                                                                                                                      
-                                                                                                                                                                                                                                                    
-        await Task.WhenAll(workers);  
+            .Select(_ => Worker(channel));                                                                                                                                                                                                                                      
+        await Task.WhenAll(workers.Append(acceptLoop));  
+    }
+
+    private async Task Worker(Channel<NetClient> channel)
+    {
+        await foreach (var client in channel.Reader.ReadAllAsync())
+            await ProcessClient(client);
+    }
+
+    private async Task AcceptLoop(Channel<NetClient> channel)
+    {
+        while (true)
+            try
+            {
+                await channel.Writer.WriteAsync(await _handler.AcceptAsync());
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Processing error: {ex.InnerException?.ToString() ?? ex.ToString()}");
+            }
     }
     
     private async Task ProcessClient(NetClient client)
