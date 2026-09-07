@@ -32,10 +32,24 @@ public class NetClient : IDisposable
         var data = response.BinaryBody != null                                                                                                                                                                                                        
             ? response.ToHttpResponseBytes()                                                                                                                                                                                                          
             : Encoding.UTF8.GetBytes(response.ToHttpResponse());                                                                                                                                                                                      
-        await _clientSocket.SendAsync(data);                                                                                                                                                                                                          
-        _clientSocket.Shutdown(SocketShutdown.Both);                                                                                                                                                                                                  
-    } 
-    //наверное когданибудь пригодиться
+        await _clientSocket.SendAsync(data);
+        ShutdownQuietly();
+    }
+
+    private void ShutdownQuietly()
+    {
+        try
+        {
+            _clientSocket.Shutdown(SocketShutdown.Both);
+        }
+        catch (SocketException)
+        {
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
+
     public async Task SendOverloadedResponse()                                                                                                                                                                                                        
     {                                                                                                                                                                                                                                                 
         var response = new HttpResponse(503, "Service Unavailable");                                                                                                                                                                                  

@@ -41,7 +41,16 @@ public class WebApplication
     private async Task Worker(Channel<NetClient> channel)
     {
         await foreach (var client in channel.Reader.ReadAllAsync())
-            await ProcessClient(client);
+        {
+            try
+            {
+                await ProcessClient(client);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Worker error: {ex}");
+            }
+        }
     }
 
     private async Task AcceptLoop(Channel<NetClient> channel)
@@ -105,8 +114,16 @@ public class WebApplication
             }
             finally
             {
-                if (client.IsConnected())
-                    await client.SendResponse(response);
+                try
+                {
+                    response ??= new HttpResponse(500, "Internal server error");
+                    if (client.IsConnected())
+                        await client.SendResponse(response);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Send error: {ex.Message}");
+                }
             }
         }
     }
