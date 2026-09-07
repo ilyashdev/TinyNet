@@ -1,6 +1,6 @@
 # TinyNet
 
-A lightweight, ASP.NET Core-inspired HTTP web framework built from scratch in C# .NET 9.
+A lightweight, ASP.NET Core-inspired HTTP web framework built from scratch in C# .NET 10 (LTS).
 
 ---
 
