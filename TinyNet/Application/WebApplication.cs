@@ -30,7 +30,12 @@ public class WebApplication
     public async Task Run()
     {
         Console.WriteLine($"Application started on http://localhost:{_configuration["Server:Port"]}");
-        var channel = Channel.CreateUnbounded<NetClient>();
+        var channel = Channel.CreateBounded<NetClient>(
+            new BoundedChannelOptions(HttpLimits.MaxQueuedConnections)
+            {
+                FullMode = BoundedChannelFullMode.Wait,
+                SingleWriter = true
+            });
         var acceptLoop = AcceptLoop(channel);
         int workerCount = Environment.ProcessorCount * 2 - 1;                                                                                                                                                                                         
         var workers = Enumerable.Range(0, workerCount)                                                                                                                                                                                                
@@ -56,14 +61,23 @@ public class WebApplication
     private async Task AcceptLoop(Channel<NetClient> channel)
     {
         while (true)
+        {
+            NetClient client = null;
             try
             {
-                await channel.Writer.WriteAsync(await _handler.AcceptAsync());
+                client = await _handler.AcceptAsync();
+                if (!channel.Writer.TryWrite(client))
+                {
+                    await client.SendOverloadedResponse();
+                    client.Dispose();
+                }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Processing error: {ex.InnerException?.ToString() ?? ex.ToString()}");
+                client?.Dispose();
+                Console.WriteLine($"Accept error: {ex.InnerException?.Message ?? ex.Message}");
             }
+        }
     }
     
     private async Task ProcessClient(NetClient client)
@@ -72,6 +86,7 @@ public class WebApplication
         using (DIScope scope = new())
         {
             HttpResponse response = null;
+            bool silent = false;
             try
             {
 
@@ -106,6 +121,25 @@ public class WebApplication
                 }
 
             }
+            catch (ConnectionClosedException)
+            {
+                silent = true;
+            }
+            catch (RequestTooLargeException ex)
+            {
+                Console.WriteLine($"Request rejected: {ex.Message}");
+                response = new HttpResponse(413, "Content too large");
+            }
+            catch (RequestTimeoutException ex)
+            {
+                Console.WriteLine($"Request rejected: {ex.Message}");
+                response = new HttpResponse(408, "Request timeout");
+            }
+            catch (BadRequestException ex)
+            {
+                Console.WriteLine($"Request rejected: {ex.Message}");
+                response = new HttpResponse(400, "Bad request");
+            }
             catch (Exception ex)
             {
                 Console.WriteLine($"Processing error: {ex.Message}");
@@ -116,9 +150,12 @@ public class WebApplication
             {
                 try
                 {
-                    response ??= new HttpResponse(500, "Internal server error");
-                    if (client.IsConnected())
-                        await client.SendResponse(response);
+                    if (!silent)
+                    {
+                        response ??= new HttpResponse(500, "Internal server error");
+                        if (client.IsConnected())
+                            await client.SendResponse(response);
+                    }
                 }
                 catch (Exception ex)
                 {
