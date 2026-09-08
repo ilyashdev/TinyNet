@@ -1,4 +1,4 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using System.Linq.Expressions;
 using TinyNet.Middlewares;
 
@@ -6,7 +6,7 @@ namespace TinyNet.DI;
 
 public class DIContainer
 {
-    private readonly ConcurrentDictionary<Type, object> _singletonInstances = new();
+    private readonly ConcurrentDictionary<Type, Lazy<object>> _singletonInstances = new();
     private readonly ConcurrentDictionary<Type, ServiceDescriptor> _descriptors = new(); 
     private readonly ConcurrentDictionary<Type, Func<object[], object>> _factories = new();    
     private readonly ConcurrentDictionary<Type, Type[]> _ctorParams = new();
@@ -43,7 +43,7 @@ public class DIContainer
     public void AddInstance<TService>(TService instance)
     {
         AddSingleton<TService>();
-        _singletonInstances.TryAdd(typeof(TService), instance);
+        _singletonInstances.TryAdd(typeof(TService), new Lazy<object>(instance!));
     }
 
     private void Register<TService, TImplementation>(ServiceLifetime lifetime)
@@ -66,8 +66,8 @@ public class DIContainer
             return descriptor.Lifetime switch
             {
                 ServiceLifetime.Transient => CreateInstance(descriptor.ImplementationType, scope,resolving),
-                ServiceLifetime.Scoped => GetInstance(descriptor, scope._scopedInstances, scope, resolving),
-                ServiceLifetime.Singleton => GetInstance(descriptor, _singletonInstances, scope, resolving),
+                ServiceLifetime.Scoped => GetScoped(descriptor, scope, resolving),
+                ServiceLifetime.Singleton => GetSingleton(descriptor, scope, resolving),
                 _ => throw new ArgumentOutOfRangeException()
             };
     }
@@ -100,27 +100,42 @@ public class DIContainer
         return new MiddlewareMeta(factory, paramMetas);                                                                                                                                                                                               
     }  
 
-    internal object GetInstance(ServiceDescriptor descriptor, IDictionary<Type, object> instances, DIScope scope, HashSet<Type> resolving)                                                                                                            
-    {                                                                                                                                                                                                                                                 
-        if (instances is ConcurrentDictionary<Type, object> concurrent)                                                                                                                                                                               
-            return concurrent.GetOrAdd(descriptor.ServiceType,                                                                                                                                                                                        
-                _ => CreateInstance(descriptor.ImplementationType, scope, resolving));                                                                                                                                                                
-                                                                                                                                                                                                                                                      
-        if (!instances.TryGetValue(descriptor.ServiceType, out var existing))                                                                                                                                                                         
-        {                                                                                                                                                                                                                                             
-            existing = CreateInstance(descriptor.ImplementationType, scope, resolving);                                                                                                                                                               
-            instances[descriptor.ServiceType] = existing;                                                                                                                                                                                             
-        }                                                                                                                                                                                                                                             
-        return existing;                                                                                                                                                                                                                              
-    }  
+    private object GetSingleton(ServiceDescriptor descriptor, DIScope scope, HashSet<Type> resolving)
+    {
+        var lazy = _singletonInstances.GetOrAdd(
+            descriptor.ServiceType,
+            _ => new Lazy<object>(
+                () => CreateInstance(descriptor.ImplementationType, scope, resolving),
+                LazyThreadSafetyMode.ExecutionAndPublication));
+        return lazy.Value;
+    }
+
+    private object GetScoped(ServiceDescriptor descriptor, DIScope scope, HashSet<Type> resolving)
+    {
+        if (!scope._scopedInstances.TryGetValue(descriptor.ServiceType, out var existing))
+        {
+            existing = CreateInstance(descriptor.ImplementationType, scope, resolving);
+            scope._scopedInstances[descriptor.ServiceType] = existing;
+        }
+        return existing;
+    }
     private object CreateInstance(Type type, DIScope scope, HashSet<Type> resolving)                                                                                                                                                                  
-    {                                                                                                                                                                                                                                                 
-        var factory = _factories.GetOrAdd(type, BuildFactory);                                                                                                                                                                                        
-        var paramTypes = _ctorParams.GetOrAdd(type, t => t.GetConstructors()                                                                                                                                                                          
-            .OrderByDescending(c => c.GetParameters().Length)                                                                                                                                                                                         
-            .First().GetParameters().Select(p => p.ParameterType).ToArray());                                                                                                                                                                         
-        var parameters = paramTypes.Select(p => GetService(p, scope, resolving)).ToArray();                                                                                                                                                           
-        return factory(parameters);                                                                                                                                                                                                                   
+    {
+        if(!resolving.Add(type)) 
+            throw  new InvalidOperationException($"Type {type} has cyclic dependency");
+        try
+        {
+            var factory = _factories.GetOrAdd(type, BuildFactory);                                                                                                                                                                                        
+            var paramTypes = _ctorParams.GetOrAdd(type, t => t.GetConstructors()                                                                                                                                                                          
+                .OrderByDescending(c => c.GetParameters().Length)                                                                                                                                                                                         
+                .First().GetParameters().Select(p => p.ParameterType).ToArray());                                                                                                                                                                         
+            var parameters = paramTypes.Select(p => GetService(p, scope, resolving)).ToArray();                                                                                                                                                           
+            return factory(parameters);
+        }
+        finally
+        {
+            resolving.Remove(type);    
+        }
     }   
 
     private static Func<object[], object> BuildFactory(Type type)

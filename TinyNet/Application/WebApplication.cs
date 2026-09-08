@@ -98,7 +98,7 @@ public class WebApplication
                     var controllerType = _controllerHandler.GetTypeHandler(request.Url);
                     if (controllerType.Status != HandleResultStatus.Success)
                     {
-                        new BadRequest(controllerType.Status).ExecuteResult(context);
+                        new NotFound(controllerType.Status).ExecuteResult(context);
                     }
                     else
                     {
