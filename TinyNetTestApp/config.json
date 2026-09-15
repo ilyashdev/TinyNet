@@ -5,6 +5,6 @@
   "WebRoot":
   {
     "HandleFile": "True",
-    "Path" : "/WebRoot"
+    "Path" : "./WebRoot"
   }
 }

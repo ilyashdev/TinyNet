@@ -1,4 +1,4 @@
-﻿using TinyNet.Configurations;
+using TinyNet.Configurations;
 using TinyNet.Controllers;
 using TinyNet.DI;
 using TinyNet.Middlewares;
@@ -11,17 +11,30 @@ public class AppBuilder
     private NetHandler _netHandler;
     private ConfigurationBuilder _configBuilder { get; init; }
     private MiddlewarePipeline _pipeline { get; init; }
-    private ControllerHandler _controllerHandler;
 
     public AppBuilder()
     {
         _configBuilder = new ConfigurationBuilder();
+        _configBuilder.AddDefaults(FrameworkDefaults.All);
         Services = new DIContainer();
         _pipeline = new MiddlewarePipeline(Services);
     }
-    public AppBuilder AddJsonConfig(string path)
+
+    public AppBuilder AddDefault(string key, string value)
     {
-        _configBuilder.AddJsonFile(path);
+        _configBuilder.AddDefault(key, value);
+        return this;
+    }
+
+    public AppBuilder AddDefaults(IEnumerable<KeyValuePair<string, string>> values)
+    {
+        _configBuilder.AddDefaults(values);
+        return this;
+    }
+
+    public AppBuilder AddJsonConfig(string path, bool optional = false)
+    {
+        _configBuilder.AddJsonFile(path, optional);
         return this;
     }
 
@@ -45,17 +58,19 @@ public class AppBuilder
 
     public WebApplication Build()
     {
-        var conf = _configBuilder.Build();
+        var conf = 
+            _configBuilder
+                
+                .Build();
+        
         Services.AddInstance(conf);
         Services.AddTransient<MediaHandler>();
-        _netHandler = new(
-            Convert.ToInt32(
-            conf["Server:Port"]));
-        _controllerHandler = new ControllerHandler(Services);
-        _controllerHandler.InitControllers();
+        _netHandler = new(conf.GetValue<int>(FrameworkDefaults.ServerPort));
+        var controllerHandler = new ControllerHandler(Services);
+            controllerHandler.InitControllers();
         return new WebApplication(
             _netHandler,
-            _controllerHandler,
+            controllerHandler,
             _pipeline,
             conf
         );

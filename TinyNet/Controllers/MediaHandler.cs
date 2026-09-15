@@ -1,4 +1,4 @@
-﻿using System.Diagnostics.CodeAnalysis;
+using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using TinyNet.ActionResult;
 using TinyNet.ActionResult.Results;
@@ -31,9 +31,9 @@ public class MediaHandler : Controller
 
     public MediaHandler(IConfiguration config)
     {
-        _webRoot = Path.GetFullPath(Path.Combine(
-            Directory.GetCurrentDirectory(),
-            (config["WebRoot:Path"] ?? "/WebRoot").TrimStart('/', '\\')));
+        var configured = config["WebRoot:Path"] ??
+                         throw new InvalidOperationException("Configuration key 'WebRoot:Path' is not set");
+        _webRoot = Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), configured));
     }
 
     [HttpMethod("GET")]

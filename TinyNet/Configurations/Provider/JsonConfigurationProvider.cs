@@ -5,15 +5,46 @@ namespace TinyNet.Configurations.Provider;
 public class JsonConfigurationProvider : IConfigurationProvider
 {
     private readonly string _filePath;
+    private readonly bool _optional;
     private Dictionary<string, string> _data = new();
 
-    public JsonConfigurationProvider(string filePath) => _filePath = filePath;
+    public JsonConfigurationProvider(string filePath, bool optional = false)
+    {
+        _filePath = filePath;
+        _optional = optional;
+    }
 
     public void Load()
     {
-        var json = File.ReadAllText(_filePath);
-        var jsonDict = JsonSerializer.Deserialize<Dictionary<string, object>>(json);
-        _data = FlattenDictionary(jsonDict);
+        if (!File.Exists(_filePath))
+        {
+            if (_optional)
+                return;
+            throw new FileNotFoundException(
+                $"Configuration file '{_filePath}' not found. Pass optional: true to ignore it.", _filePath);
+        }
+
+        string json;
+        try
+        {
+            json = File.ReadAllText(_filePath);
+        }
+        catch (IOException ex)
+        {
+            throw new InvalidOperationException($"Cannot read configuration file '{_filePath}': {ex.Message}", ex);
+        }
+
+        Dictionary<string, object> jsonDict;
+        try
+        {
+            jsonDict = JsonSerializer.Deserialize<Dictionary<string, object>>(json);
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException($"Configuration file '{_filePath}' is not valid JSON: {ex.Message}", ex);
+        }
+
+        _data = jsonDict == null ? new() : FlattenDictionary(jsonDict);
     }
 
     private Dictionary<string, string> FlattenDictionary(
