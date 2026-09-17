@@ -20,6 +20,8 @@ public class NetHandler
         _socket.Listen(1000);
 
     }
+    
+    public int Port => ((IPEndPoint)_socket.LocalEndPoint!).Port;
 
 
     public NetClient Accept()

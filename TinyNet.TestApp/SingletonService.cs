@@ -1,4 +1,4 @@
-﻿namespace TinyNetTestApp;
+﻿namespace TinyNet.TestApp;
 
 public class SingletonService
 {

@@ -3,7 +3,7 @@ using TinyNet.ActionResult;
 using TinyNet.ActionResult.Results;
 using TinyNet.Controllers;
 
-namespace TinyNetTestApp;
+namespace TinyNet.TestApp;
 
 [Route("/")]
 public class TinyController : Controller

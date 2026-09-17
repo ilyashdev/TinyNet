@@ -1,53 +1,42 @@
 # TinyNet
 
-Лёгкий HTTP веб-фреймворк, вдохновлённый ASP.NET Core, написанный с нуля на C# .NET 10 (LTS).
+HTTP-фреймворк, написанный с нуля на C# под .NET 10.
+
+[English version](README.md)
 
 ---
 
-## Содержание
+## Состояние
 
-- [Обзор](#обзор)
-- [Быстрый старт](#быстрый-старт)
-- [Архитектура](#архитектура)
-- [Модули](#модули)
-  - [Приложение](#приложение)
-  - [Внедрение зависимостей](#внедрение-зависимостей)
-  - [Контроллеры и маршрутизация](#контроллеры-и-маршрутизация)
-  - [Middleware и фильтры](#middleware-и-фильтры)
-  - [Конфигурация](#конфигурация)
-  - [HTTP](#http)
-  - [Action Results](#action-results)
-  - [Статические файлы](#статические-файлы)
-- [Примеры](#примеры)
-- [Лицензия](#лицензия)
+**Работает**
 
----
+- Текучий построитель приложения
+- Внедрение зависимостей с временами жизни singleton, scoped и transient
+- Маршрутизация по атрибутам на точных путях
+- Глобальные middleware и фильтры на контроллер
+- Конфигурация из значений по умолчанию, JSON и переменных окружения
+- Чтение запроса с телом фиксированной длины и chunked
+- Настраиваемые лимиты запроса с ответами `413`, `408` и `400`
+- Контроль приёма: ограниченная очередь и `503` при её заполнении
+- Статические файлы
 
-## Обзор
+**В работе**
 
-TinyNet — минималистичный HTTP сервер-фреймворк, реализующий основные концепции современных веб-фреймворков:
-
-- Fluent-builder для сборки приложения
-- Внедрение зависимостей с поддержкой Singleton, Scoped и Transient
-- Middleware pipeline с поддержкой per-controller фильтров
-- Маршрутизация и привязка HTTP-методов через атрибуты
-- Многоуровневая система конфигурации через провайдеры, с дефолтами фреймворка
-- Асинхронная обработка запросов через ограниченный `Channel<T>` и пул воркеров
-- Admission control: выделенный поток приёма и честный `503` под перегрузом
-- Настраиваемые лимиты запроса (`413`, `408`, `400`), проверяемые при чтении
-- Раздача статических файлов
+- Keep-alive — сейчас каждый ответ закрывает соединение
+- Шаблоны маршрутов вида `/users/{id}`
+- Тело запроса и ответа как поток — сейчас тело разбирается как JSON
+- Привязка query для типов, кроме чисел
+- Статика: кэширование, `ETag`, `304`, `HEAD`
 
 ---
 
 ## Быстрый старт
 
-### 1. Создать приложение
-
 ```csharp
 var builder = new AppBuilder();
 
 builder.AddJsonConfig("config.json");
-builder.AddEnvironmentVariables("MYAPP_");
+builder.AddEnvironmentVariables("TINYNET_");
 
 builder.Services.AddSingleton<MyService>();
 builder.RegisterMiddleware<LoggingMiddleware>();
@@ -56,45 +45,36 @@ var app = builder.Build();
 await app.Run();
 ```
 
-### 2. Создать контроллер
-
 ```csharp
 [Route("/hello")]
 public class HelloController : Controller
 {
     private readonly MyService _service;
 
-    public HelloController(MyService service)
-    {
-        _service = service;
-    }
+    public HelloController(MyService service) => _service = service;
 
     [HttpMethod("GET")]
-    public IActionResult Get()
-    {
-        return new Ok(new { message = "Привет, мир!" });
-    }
-
-    [HttpMethod("POST")]
-    public IActionResult Post([FromBody] string name)
-    {
-        return new Ok(new { message = $"Привет, {name}!" });
-    }
+    public IActionResult Get() => new Ok(new { message = "Hello, World!" });
 }
 ```
-
-### 3. Файл конфигурации (`config.json`)
 
 ```json
 {
-  "Server": {
-    "Port": 5000
-  },
-  "WebRoot": {
-    "Path": "./WebRoot"
-  }
+  "Server": { "Port": 5000 },
+  "WebRoot": { "Path": "./WebRoot" }
 }
 ```
+
+---
+
+## Состав решения
+
+| Проект | Назначение |
+|---|---|
+| `TinyNet` | Фреймворк |
+| [`TinyNet.TestApp`](TinyNet.TestApp/README.ru.md) | Пример приложения |
+| [`TinyNet.Tests`](TinyNet.Tests/README.ru.md) | Тесты |
+| [`TinyNet.K6Bench`](TinyNet.K6Bench/README.ru.md) | Симуляторы нагрузки и сценарии k6 |
 
 ---
 
@@ -102,220 +82,82 @@ public class HelloController : Controller
 
 ```
 AppBuilder
-    │
-    ├── DIContainer          — регистрация и разрешение зависимостей
-    ├── ConfigurationBuilder — провайдеры конфигурации
-    └── MiddlewarePipeline   — регистрация middleware
+    ├── DIContainer
+    ├── ConfigurationBuilder
+    └── MiddlewarePipeline
             │
             ▼
     WebApplication
-            │
-            ├── поток приёма "tinynet-accept"    — выделенный поток ОС
-            │       │  NetHandler.Accept()        — блокирующий
-            │       ▼
-            ├── Channel<NetClient>                — ограниченный; полон ⇒ 503
+            ├── поток приёма "tinynet-accept"
             │       │
             │       ▼
-            └── Пул воркеров (N = Server:MaxConcurrentRequests)
+            ├── Channel<NetClient>   — ограничен; заполнен ⇒ 503
+            │       │
+            │       ▼
+            └── пул рабочих          — N = Server:MaxConcurrentRequests
                     │
                     ▼
-            ProcessClient
-                    ├── DIScope (на время соединения)
-                    ├── BuildResponse
-                    │       ├── NetClient.GetRequest  — лимиты, таймаут
-                    │       └── Dispatch
-                    │               └── MiddlewarePipeline.InvokeAsync
-                    │                       └── ControllerHandler.Handle
-                    │                               ├── Разрешение контроллера через DI
-                    │                               ├── Привязка параметров
-                    │                               └── Вызов метода
-                    └── SendSafely
+            MiddlewarePipeline → ControllerHandler → IActionResult
 ```
 
-### Жизненный цикл запроса
+Путь запроса:
 
-1. Выделенный поток приёма вызывает блокирующий `NetHandler.Accept()`
-2. `NetClient` записывается в ограниченный `Channel<NetClient>`. Если канал полон, этот же
-   поток сам отвечает `503` и закрывает соединение
-3. Один из N воркеров забирает клиента из канала
-4. Создаётся `DIScope` на время жизни соединения
-5. `HttpRequest` читается и разбирается под `HttpLimits`, при превышении лимита получается
-   `413`, `408` или `400`
-6. `MiddlewarePipeline` строит и запускает цепочку middleware
-7. `ControllerHandler` разрешает контроллер через DI, привязывает параметры, вызывает метод
-8. `IActionResult.ExecuteResult` формирует `HttpResponse`
-9. Ответ отправляется по сокету, сокет закрывается
-
-### Почему приём живёт на отдельном потоке
-
-Раньше `AcceptLoop` был задачей в общем пуле потоков. Когда прикладной код блокирует поток
-пула — `Thread.Sleep`, `.Result`, любое синхронное ожидание внутри async-обработчика — пул
-голодает, продолжение приёма некому выполнить, и сервер перестаёт принимать соединения.
-Очередь прослушивания переполняется, и ОС начинает отклонять соединения на уровне TCP:
-клиент видит отказ вместо ответа, а в логе не появляется ничего.
-
-Поскольку путь `503` живёт внутри цикла приёма, admission control умирал первым — ровно
-тогда, когда был нужен. Приём на собственном потоке, с блокирующим `Accept()` и синхронной
-записью `503`, делает этот путь независимым от прикладного кода. Это разделение реактора и
-пула у Puma и разделение boss- и worker-групп у Netty, ценой в один поток. Замеры — в
-[`TinyNetTestApp/loadtests`](TinyNetTestApp/loadtests/README.ru.md).
-
-Блокирующие обработчики по-прежнему снижают пропускную способность: воркеры работают в пуле.
-Выделенный поток гарантирует другое — что сервер деградирует честно и сообщает об этом.
+1. Выделенный поток принимает соединение и кладёт его в ограниченный канал. Когда канал
+   заполнен, этот же поток сам отвечает `503` и закрывает соединение.
+2. Рабочий забирает соединение и открывает `DIScope` на время запроса.
+3. Запрос читается под `HttpLimits`, которые дают `413`, `408` или `400` при превышении
+   лимита.
+4. Отрабатывает цепочка middleware, затем `ControllerHandler` достаёт контроллер, привязывает
+   параметры и вызывает метод.
+5. `IActionResult.ExecuteResult` заполняет `HttpResponse`, который пишется в сокет.
 
 ---
 
-## Модули
-
-### Приложение
-
-#### `AppBuilder`
-
-Точка входа для конфигурации и сборки приложения.
+## Внедрение зависимостей
 
 ```csharp
-var builder = new AppBuilder();
-```
-
-| Метод | Описание |
-|-------|----------|
-| `AddJsonConfig(string path)` | Добавляет JSON-файл конфигурации |
-| `AddEnvironmentVariables(string? prefix)` | Добавляет переменные окружения как источник конфигурации |
-| `RegisterMiddleware<T>()` | Регистрирует глобальный middleware |
-| `RegisterFilter<T>()` | Регистрирует условный per-controller фильтр |
-| `Services` | Доступ к `DIContainer` для регистрации сервисов |
-| `Build()` | Собирает и возвращает `WebApplication` |
-
-#### `WebApplication`
-
-```csharp
-await app.Run();               // работает, пока процесс не остановят
-await app.Run(cancellation);   // возвращается, когда токен отменён
-```
-
-Запускает сервер. Внутри:
-- Запускает N воркеров (`Server:MaxConcurrentRequests`), читающих из канала через `ReadAllAsync`
-- Поднимает цикл приёма на выделенном фоновом потоке с именем `tinynet-accept`
-- При отмене: прекращает слушать, закрывает канал, чтобы воркеры его дочитали, и возвращается
-
----
-
-### Внедрение зависимостей
-
-`DIContainer` поддерживает три времени жизни сервисов:
-
-| Lifetime | Поведение |
-|----------|-----------|
-| `Singleton` | Один экземпляр на всё время жизни приложения |
-| `Scoped` | Один экземпляр на HTTP-запрос (`DIScope`) |
-| `Transient` | Новый экземпляр при каждом запросе |
-
-#### Регистрация
-
-```csharp
-// Через интерфейс и реализацию
 builder.Services.AddSingleton<IMyService, MyService>();
 builder.Services.AddScoped<IMyService, MyService>();
 builder.Services.AddTransient<IMyService, MyService>();
-
-// Только через тип реализации
 builder.Services.AddSingleton<MyService>();
-
-// Через объект Type (используется внутри)
-builder.Services.AddTransient(typeof(MyService));
-
-// Готовый экземпляр
 builder.Services.AddInstance<IMyService>(existingInstance);
 ```
 
-#### Инъекция через конструктор
-
-Контроллеры и middleware получают зависимости через конструктор автоматически.
-
-```csharp
-[Route("/users")]
-public class UsersController : Controller
-{
-    public UsersController(IUserRepository repo, ILogger logger) { ... }
-}
-```
-
-#### Обнаружение циклических зависимостей
-
-Контейнер обнаруживает циклические зависимости при разрешении и бросает `InvalidOperationException`.
-
-#### Производительность
-
-Вызов конструктора компилируется в нативный делегат через `Expression.Lambda` при первом использовании и кэшируется — последующие разрешения не используют reflection.
+Контроллеры и middleware получают зависимости через конструктор; выбирается конструктор с
+наибольшим числом параметров. Циклические зависимости бросают `InvalidOperationException`
+при разрешении. Конструкторы компилируются в делегаты при первом обращении и кэшируются,
+поэтому разрешение не идёт через рефлексию.
 
 ---
 
-### Контроллеры и маршрутизация
+## Контроллеры и маршрутизация
 
-#### Определение контроллера
-
-Контроллер должен:
-- Наследоваться от `Controller`
-- Быть помечен атрибутом `[Route]`
-- Иметь хотя бы один метод с атрибутом `[HttpMethod]`
+Контроллер наследуется от `Controller`, помечается `[Route]` и содержит методы с
+`[HttpMethod]`. Маршрут сопоставляется как точный путь, а контроллер обрабатывает по одному
+методу на HTTP-глагол.
 
 ```csharp
 [Route("/products")]
 public class ProductsController : Controller
 {
     [HttpMethod("GET")]
-    public IActionResult GetAll()
-    {
-        return new Ok(new[] { "product1", "product2" });
-    }
+    public IActionResult GetAll() => new Ok(new[] { "first", "second" });
 
     [HttpMethod("POST")]
-    public IActionResult Create([FromBody] string name)
-    {
-        return new Ok(new { created = name });
-    }
+    public IActionResult Create([FromBody] string name) => new Ok(new { created = name });
+
+    [HttpMethod("PUT")]
+    public IActionResult Resize([FromQuery] int width) => new Ok(new { width });
 }
 ```
 
-#### Привязка параметров
-
-| Атрибут | Источник | Тип |
-|---------|----------|-----|
-| `[FromBody]` | JSON тело запроса | Любой JSON-десериализуемый тип |
-| `[FromQuery]` | Query-строка URL | `string` |
-
-```csharp
-[HttpMethod("GET")]
-public IActionResult Search([FromQuery] string term)
-{
-    return new Ok(new { query = term });
-}
-
-[HttpMethod("POST")]
-public IActionResult Submit([FromBody] string payload)
-{
-    return new Ok(payload);
-}
-```
-
-#### Исключение контроллера из маршрутизации
-
-```csharp
-[NotMapped]
-public class InternalController : Controller { ... }
-```
-
-#### Поддерживаемые HTTP-методы
-
-`GET`, `POST`, `PUT`, `DELETE`, `PATCH`, `HEAD`, `OPTIONS`
+`[FromBody]` берёт свойство JSON-тела с именем параметра. `[FromQuery]` берёт значение из
+строки запроса. Принимаются `GET`, `POST`, `PUT`, `DELETE`, `PATCH`, `HEAD` и `OPTIONS`.
+`[NotMapped]` исключает контроллер из маршрутизации.
 
 ---
 
-### Middleware и фильтры
-
-#### Создание middleware
-
-Наследуйтесь от `Middleware` и реализуйте `InvokeAsync`:
+## Middleware и фильтры
 
 ```csharp
 public class LoggingMiddleware : Middleware
@@ -326,161 +168,72 @@ public class LoggingMiddleware : Middleware
     {
         Console.WriteLine($"→ {context.Request.Method} {context.Request.Url}");
         await _next(context);
-        Console.WriteLine($"← {context.Response?.StatusCode}");
     }
 }
 ```
 
-#### Регистрация глобального middleware
-
-Выполняется для каждого запроса:
-
-```csharp
-builder.RegisterMiddleware<LoggingMiddleware>();
-```
-
-#### Регистрация фильтра
-
-Выполняется только для контроллеров, помеченных `[Filter(typeof(T))]`:
-
-```csharp
-builder.RegisterFilter<AuthMiddleware>();
-```
-
-```csharp
-[Route("/admin")]
-[Filter(typeof(AuthMiddleware))]
-public class AdminController : Controller { ... }
-```
-
-#### Порядок выполнения
-
-Сначала выполняются глобальные middleware, затем фильтры применимые к найденному контроллеру. Все выполняются в порядке регистрации.
+`RegisterMiddleware<T>()` выполняет middleware для каждого запроса. `RegisterFilter<T>()` —
+только для контроллеров, помеченных `[Filter(typeof(T))]`. Сначала идут глобальные
+middleware, затем фильтры найденного контроллера, каждая группа в порядке регистрации.
+Middleware, не вызывающая `_next`, обрывает цепочку.
 
 ---
 
-### Конфигурация
+## Конфигурация
 
-#### Провайдеры
+Источники читаются в порядке значения по умолчанию → `config.json` → переменные окружения,
+и более поздний источник побеждает. Значения по умолчанию всегда идут первыми, в каком бы
+порядке их ни зарегистрировали.
 
-| Провайдер | Регистрация |
-|-----------|-------------|
-| Дефолты фреймворка | автоматически |
-| Собственные дефолты | `builder.AddDefault(key, value)` / `AddDefaults(pairs)` |
-| JSON-файл | `builder.AddJsonConfig("config.json", optional: false)` |
-| Переменные окружения | `builder.AddEnvironmentVariables("PREFIX_")` |
+```csharp
+builder.AddDefault("Server:Port", "8080");
+builder.AddJsonConfig("config.json", optional: false);
+builder.AddEnvironmentVariables("TINYNET_");
+```
 
-Провайдеры, добавленные позже, имеют приоритет над ранее добавленными, а дефолты всегда
-ставятся первыми независимо от порядка вызовов — поэтому приоритет
-`дефолты → json → переменные окружения` нельзя сломать, перепутав последовательность.
+Вложенные ключи JSON разворачиваются через `:`, а `__` в переменной окружения означает тот
+же разделитель: `TINYNET_Server__Port=5000` даёт `Server:Port`. Значения читаются через
+`IConfiguration`, доступный в любом классе, полученном из DI:
 
-#### Дефолты фреймворка
+```csharp
+var port = configuration.GetValue<int>("Server:Port");
+var path = configuration["WebRoot:Path"];
+```
 
-`Application/FrameworkDefaults.cs` — единственное место, где живут собственные дефолты
-фреймворка. Всё вынесено в ключи конфигурации, поэтому любой лимит меняется под конкретное
-развёртывание без правки кода:
+### Ключи фреймворка
 
-| Ключ | По умолчанию | Значение |
-|------|--------------|----------|
-| `Server:Port` | `5000` | порт прослушивания |
-| `Server:MaxConcurrentRequests` | `256` | число воркеров — потолок конкурентности |
-| `Server:MaxQueuedConnections` | `1024` | ёмкость канала; полон ⇒ `503` |
+| Ключ | По умолчанию | Смысл |
+|---|---|---|
+| `Server:Port` | `5000` | порт прослушивания; `0` — выбирает ОС |
+| `Server:MaxConcurrentRequests` | `256` | число рабочих |
+| `Server:MaxQueuedConnections` | `1024` | размер очереди; заполнена ⇒ `503` |
 | `Server:MaxHeadBytes` | `16384` | лимит головы запроса ⇒ `413` |
 | `Server:MaxBodyBytes` | `8388608` | лимит тела запроса ⇒ `413` |
-| `Server:ReceiveBufferSize` | `8192` | буфер чтения из сокета |
-| `Server:ReadTimeoutSeconds` | `15` | время на присылку полного запроса ⇒ `408` |
-| `WebRoot:Path` | `./WebRoot` | корень статики; относительный или абсолютный |
-
-Ёмкость выводится из первых трёх: потолок пропускной способности равен
-`MaxConcurrentRequests / длительность обработчика`, а полная очередь добавляет
-`MaxQueuedConnections / MaxConcurrentRequests` секунд ожидания. Оба соотношения проверены
-замером — см. [`TinyNetTestApp/loadtests`](TinyNetTestApp/loadtests/README.ru.md).
-
-#### Доступ к конфигурации
-
-`IConfiguration` доступна в любом классе через DI:
-
-```csharp
-public class MyService
-{
-    public MyService(IConfiguration config)
-    {
-        var port = config["Server:Port"];
-        var section = config.GetSection("Server");
-        var portFromSection = section["Port"];
-    }
-}
-```
-
-#### Формат ключей
-
-Вложенные JSON-ключи сплющиваются с разделителем `:`:
-
-```json
-{ "Server": { "Port": 5000 } }
-```
-→ `config["Server:Port"]` = `"5000"`
-
-Переменные окружения используют `__` как разделитель, который преобразуется в `:`:
-
-```
-PREFIX_Server__Port=5000
-```
-→ `config["Server:Port"]` = `"5000"`
+| `Server:ReceiveBufferSize` | `8192` | буфер чтения сокета |
+| `Server:ReadTimeoutSeconds` | `15` | время на полный запрос ⇒ `408` |
+| `WebRoot:Path` | `./WebRoot` | корень статики, относительный или абсолютный |
 
 ---
 
-### HTTP
+## Результаты действий
 
-#### `HttpRequest`
-
-| Свойство | Тип | Описание |
-|----------|-----|----------|
-| `Method` | `string` | HTTP-метод (`GET`, `POST` и т.д.) |
-| `Url` | `string` | Путь запроса |
-| `Headers` | `Dictionary<string, string>` | Заголовки запроса (регистронезависимые) |
-| `Query` | `Dictionary<string, string>` | Параметры query-строки |
-| `Body` | `JsonObject?` | Разобранное JSON-тело |
-
-#### `HttpResponse`
-
-| Свойство | Тип | Описание |
-|----------|-----|----------|
-| `StatusCode` | `int?` | HTTP статус-код |
-| `Headers` | `Dictionary<string, string>` | Заголовки ответа |
-| `Body` | `string?` | Текстовое тело ответа |
-| `BinaryBody` | `byte[]?` | Бинарное тело ответа |
-
-Ответы сериализуются через `ToHttpResponse()` (текст) или `ToHttpResponseBytes()` (бинарный). `Content-Length` устанавливается автоматически.
-
----
-
-### Action Results
-
-Action results инкапсулируют HTTP-ответ. Все реализуют `IActionResult`.
-
-| Класс | Статус | Описание |
-|-------|--------|----------|
-| `Ok` | 200 | Успех, опциональное JSON-тело |
-| `BadRequest` | 400 | Ошибка клиента, опциональное JSON-тело |
-| `NotFound` | 404 | Ресурс не найден |
-| `InternalError` | 500 | Внутренняя ошибка сервера |
-| `HtmlView` | 200 | HTML-ответ |
-| `Media` | 200 | Текстовый или бинарный контент с произвольным Content-Type |
-
-#### Использование
+| Класс | Статус | Тело |
+|---|---|---|
+| `Ok` | 200 | необязательный JSON |
+| `BadRequest` | 400 | необязательный JSON |
+| `NotFound` | 404 | необязательный JSON |
+| `InternalError` | 500 | необязательный JSON |
+| `HtmlView` | 200 | HTML |
+| `Media` | 200 | текст или байты с явным content type |
 
 ```csharp
-return new Ok();                          // 200 пустой
-return new Ok(new { id = 1 });           // 200 с JSON-телом
-return new BadRequest("Неверный ввод");  // 400 с сообщением
-return new NotFound();                   // 404
-return new HtmlView("<h1>Привет</h1>");  // 200 text/html
-return new Media(bytes, "image/png");    // 200 бинарный
-return new Media(text, "text/csv");      // 200 текстовый
+return new Ok(new { id = 1 });
+return new HtmlView("<h1>Hello</h1>");
+return new Media(bytes, "image/png");
 ```
 
-#### Собственный action result
+Новый результат наследуется от `BaseResult` для JSON-тела либо от `ActionResult`, чтобы
+заполнить ответ самому:
 
 ```csharp
 public class Created : BaseResult
@@ -491,100 +244,17 @@ public class Created : BaseResult
 
 ---
 
-### Статические файлы
+## Статические файлы
 
-Статические файлы отдаются автоматически для любого URL содержащего `.` (например `/style.css`, `/logo.png`).
+URL, содержащий `.`, отдаётся из корня статики, который разрешается относительно рабочего
+каталога. Пути, ведущие за пределы корня, отклоняются с `404`, как и отсутствующий файл.
 
-Настройте корень статики в `config.json`:
-
-```json
-{
-  "WebRoot": {
-    "Path": "./WebRoot"
-  }
-}
-```
-
-Файлы разрешаются относительно рабочей директории приложения. Если файл не найден — возвращается `404 Not Found`.
-
-#### Поддерживаемые типы контента
-
-`html`, `css`, `js`, `json`, `xml`, `jpeg`, `jpg`, `png`, `bmp`, `gif`, `tiff`, `webp`, `zip`, `rar`
-
-Любое другое расширение отдаётся как `application/octet-stream`.
-
----
-
-## Примеры
-
-### Полный пример контроллера
-
-```csharp
-[Route("/api/items")]
-public class ItemsController : Controller
-{
-    private readonly ItemService _service;
-
-    public ItemsController(ItemService service)
-    {
-        _service = service;
-    }
-
-    [HttpMethod("GET")]
-    public IActionResult GetAll()
-    {
-        var items = _service.GetAll();
-        return new Ok(items);
-    }
-
-    [HttpMethod("POST")]
-    public async Task<IActionResult> Create([FromBody] string name)
-    {
-        var item = await _service.CreateAsync(name);
-        return new Ok(item);
-    }
-}
-```
-
-### Middleware с внедрением зависимостей
-
-```csharp
-public class AuthMiddleware : Middleware
-{
-    private readonly IConfiguration _config;
-
-    public AuthMiddleware(RequestDelegate next, IConfiguration config) : base(next)
-    {
-        _config = config;
-    }
-
-    public override async Task InvokeAsync(HttpContext context)
-    {
-        if (!context.Request.Headers.TryGetValue("Authorization", out var token))
-        {
-            context.Response = new HttpResponse(401, "Unauthorized");
-            return;
-        }
-        await _next(context);
-    }
-}
-```
-
-### Собственный action result
-
-```csharp
-public class NoContent : ActionResult
-{
-    public NoContent() : base(204) { }
-}
-```
+`html`, `css`, `js`, `json`, `xml`, `jpeg`, `jpg`, `png`, `bmp`, `gif`, `tiff`, `tif`,
+`webp`, `zip` и `rar` отдаются со своим content type, остальное — как
+`application/octet-stream`.
 
 ---
 
 ## Лицензия
 
-TinyNet распространяется под лицензией **Apache License 2.0**.
-
-Вы можете свободно использовать, изменять и распространять этот код в личных и коммерческих проектах. Любые изменения должны сохранять оригинальное уведомление об авторских правах. Лицензия также обеспечивает явную защиту от патентных претензий.
-
-Полный текст лицензии — в файле [LICENSE](LICENSE).
+Apache License 2.0 — см. [LICENSE](LICENSE).

@@ -31,9 +31,11 @@ public class WebApplication
     }
 
   
+    public int Port => _handler.Port;
+
     public async Task Run(CancellationToken ct = default)
     {
-        Console.WriteLine($"Application started on http://localhost:{_configuration["Server:Port"]}");
+        Console.WriteLine($"Application started on http://localhost:{_handler.Port}");
         var channel = Channel.CreateBounded<NetClient>(
             new BoundedChannelOptions(_configuration.GetValue<int>(FrameworkDefaults.ServerMaxQueuedConnections))
             {

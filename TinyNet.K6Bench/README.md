@@ -8,11 +8,11 @@ Measurements against the simulator endpoints in `LoadControllers.cs`.
 
 ## Running
 
-Start the server from the `TinyNetTestApp` directory — the working directory matters,
+Start the server from the `TinyNet.K6Bench` directory — the working directory matters,
 since `config.json` and `WebRoot` are resolved relative to it:
 
 ```bash
-cd TinyNetTestApp
+cd TinyNet.K6Bench
 dotnet run
 ```
 

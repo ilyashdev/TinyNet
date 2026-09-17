@@ -191,7 +191,25 @@ public class NetClient : IDisposable
         var response = new HttpResponse(503, "Service Unavailable");
         _clientSocket.SendTimeout = 250;
         _clientSocket.Send(Encoding.UTF8.GetBytes(response.ToHttpResponse()));
+        DrainQuietly();
         ShutdownQuietly();
+    }
+
+    private void DrainQuietly()
+    {
+        try
+        {
+            var sink = new byte[1024];
+            while (_clientSocket.Available > 0 && _clientSocket.Receive(sink) > 0)
+            {
+            }
+        }
+        catch (SocketException)
+        {
+        }
+        catch (ObjectDisposedException)
+        {
+        }
     }
 
     public bool IsConnected() => _clientSocket.Connected;

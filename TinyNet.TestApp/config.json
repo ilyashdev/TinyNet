@@ -1,0 +1,10 @@
+﻿{
+  "Server": {
+    "Port": 5768
+  },
+  "WebRoot":
+  {
+    "HandleFile": "True",
+    "Path" : "./WebRoot"
+  }
+}

@@ -3,16 +3,16 @@
 Замеры по эндпоинтам-имитаторам из `LoadControllers.cs`.
 
 [English version](README.md)
-
+н
 ---
 
 ## Запуск
 
-Сервер поднимается из каталога `TinyNetTestApp` — рабочий каталог обязателен,
+Сервер поднимается из каталога `TinyNet.K6Bench` — рабочий каталог обязателен,
 `config.json` и `WebRoot` ищутся относительно него:
 
 ```bash
-cd TinyNetTestApp
+cd TinyNet.K6Bench
 dotnet run
 ```
 

@@ -1,5 +1,5 @@
 ﻿using TinyNet.Application;
-using TinyNetTestApp;
+using TinyNet.TestApp;
 
 var builder = new AppBuilder();
 builder
