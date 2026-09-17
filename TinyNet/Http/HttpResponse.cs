@@ -48,10 +48,13 @@ public class HttpResponse
                                                                                                                                                                                                                                                       
         string statusText = StatusTexts.TryGetValue(StatusCode.Value, out string text) ? text : "Unknown Status";                                                                                                                                     
                                                                                                                                                                                                                                                       
-        if (!Headers.ContainsKey("Content-Length"))                                                                                                                                                                                                   
-            Headers["Content-Length"] = (BinaryBody?.Length ?? 0).ToString();                                                                                                                                                                         
-                                                                                                                                                                                                                                                      
-        var header = new StringBuilder();                                                                                                                                                                                                             
+        if (!Headers.ContainsKey("Content-Length"))
+            Headers["Content-Length"] = (BinaryBody?.Length ?? 0).ToString();
+
+        if (!Headers.ContainsKey("Connection"))
+            Headers["Connection"] = "close";
+
+        var header = new StringBuilder();                                                                                                                                                                                                        
         header.Append($"HTTP/1.1 {StatusCode} {statusText}\r\n");                                                                                                                                                                                     
         foreach (var h in Headers)                                                                                                                                                                                                                    
             header.Append($"{h.Key}: {h.Value}\r\n");                                                                                                                                                                                                 
@@ -81,8 +84,9 @@ public class HttpResponse
                 : 0;
             Headers["Content-Length"] = length.ToString();
         }
-        
-        
+
+        if (!Headers.ContainsKey("Connection"))
+            Headers["Connection"] = "close";
 
         foreach (var header in Headers)
         {

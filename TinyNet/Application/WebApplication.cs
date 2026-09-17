@@ -1,3 +1,4 @@
+using System.Net.Sockets;
 using System.Threading.Channels;
 using TinyNet.ActionResult.Results;
 using TinyNet.Configurations;
@@ -18,7 +19,10 @@ public class WebApplication
     private readonly ControllerHandler _controllerHandler;
     private readonly IConfiguration _configuration;
     public WebApplication(
-        NetHandler handler, ControllerHandler controllerHandler, MiddlewarePipeline pipeline, IConfiguration configuration)
+        NetHandler handler, 
+        ControllerHandler controllerHandler, 
+        MiddlewarePipeline pipeline, 
+        IConfiguration configuration)
     {
         _handler = handler;
         _controllerHandler = controllerHandler;
@@ -27,7 +31,7 @@ public class WebApplication
     }
 
   
-    public async Task Run()
+    public async Task Run(CancellationToken ct = default)
     {
         Console.WriteLine($"Application started on http://localhost:{_configuration["Server:Port"]}");
         var channel = Channel.CreateBounded<NetClient>(
@@ -36,21 +40,45 @@ public class WebApplication
                 FullMode = BoundedChannelFullMode.Wait,
                 SingleWriter = true
             });
-        var acceptLoop = AcceptLoop(channel);
         var workers = Enumerable
             .Range(0, _configuration.GetValue<int>(FrameworkDefaults.ServerMaxConcurrentRequests))
-            .Select(_ => Worker(channel))
+            .Select(_ => Worker(channel, ct))
             .ToArray();
-        await Task.WhenAll(workers.Append(acceptLoop));
+
+        await RunAcceptThread(channel, ct);
+        channel.Writer.Complete();
+        await Task.WhenAll(workers);
+    }
+    
+    private Task RunAcceptThread(Channel<NetClient> channel, CancellationToken ct)
+    {
+        var finished = new TaskCompletionSource();
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                AcceptLoop(channel, ct);
+            }
+            finally
+            {
+                finished.SetResult();
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "tinynet-accept"
+        };
+        thread.Start();
+        return finished.Task;
     }
 
-    private async Task Worker(Channel<NetClient> channel)
+    private async Task Worker(Channel<NetClient> channel, CancellationToken ct)
     {
         await foreach (var client in channel.Reader.ReadAllAsync())
         {
             try
             {
-                await ProcessClient(client);
+                await ProcessClient(client, ct);
             }
             catch (Exception ex)
             {
@@ -59,19 +87,27 @@ public class WebApplication
         }
     }
 
-    private async Task AcceptLoop(Channel<NetClient> channel)
+    private void AcceptLoop(Channel<NetClient> channel, CancellationToken ct)
     {
-        while (true)
+        using var stopping = ct.Register(_handler.StopListening);
+        while (!ct.IsCancellationRequested)
         {
             NetClient client = null;
             try
             {
-                client = await _handler.AcceptAsync();
+                client = _handler.Accept();
                 if (!channel.Writer.TryWrite(client))
                 {
-                    await client.SendOverloadedResponse();
+                    client.SendOverloadedResponse();
                     client.Dispose();
                 }
+            }
+            catch (Exception ex) when (ex is ObjectDisposedException or SocketException)
+            {
+                client?.Dispose();
+                if (ct.IsCancellationRequested)
+                    return;
+                Console.WriteLine($"Accept error: {ex.Message}");
             }
             catch (Exception ex)
             {
@@ -81,88 +117,86 @@ public class WebApplication
         }
     }
     
-    private async Task ProcessClient(NetClient client)
+    private async Task ProcessClient(NetClient client, CancellationToken ct)
     {
         using (client)
         using (DIScope scope = new())
         {
-            HttpResponse response = null;
-            bool silent = false;
-            try
-            {
+            var response = await BuildResponse(client, scope, ct);
+            if (response is null)
+                return;
 
-                HttpRequest request = await client.GetRequest();
-                HttpContext context = new(request, null);
+            await SendSafely(client, response);
+        }
+    }
+
+    private async Task<HttpResponse?> BuildResponse(NetClient client, DIScope scope, CancellationToken ct)
+    {
+        try
+        {
+            HttpRequest request = await client.GetRequest(ct);
+            return await Dispatch(new HttpContext(request, null, ct), scope);
+        }
+        catch (ConnectionClosedException)
+        {
+            return null;
+        }
+        catch (OperationCanceledException)
+        {
+            return null;
+        }
+        catch (Exception ex)
+        {
+            var response = ToErrorResponse(ex);
+            Console.WriteLine(response.StatusCode == 500
+                ? $"Processing error: {ex}"
+                : $"Request rejected: {ex.Message}");
+            return response;
+        }
+    }
+
+    private async Task<HttpResponse> Dispatch(HttpContext context, DIScope scope)
+    {
+        try
+        {
+            var controllerType = _controllerHandler.GetTypeHandler(context.Request!.Url);
+            if (controllerType.Status != HandleResultStatus.Success)
+            {
+                new NotFound(controllerType.Status).ExecuteResult(context);
+            }
+            else
+            {
                 var adapter = new MiddlewareControllerAdapter(_controllerHandler, scope);
-                try
-                {
-                    var controllerType = _controllerHandler.GetTypeHandler(request.Url);
-                    if (controllerType.Status != HandleResultStatus.Success)
-                    {
-                        new NotFound(controllerType.Status).ExecuteResult(context);
-                    }
-                    else
-                    {
+                await _pipeline.InvokeAsync(context, controllerType.Result, scope, adapter.InvokeAsync);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Processing error: {ex.InnerException?.ToString() ?? ex.ToString()}");
+            new InternalError().ExecuteResult(context);
+        }
 
-                        await _pipeline.InvokeAsync(
-                            context,
-                            controllerType.Result,
-                            scope,
-                            adapter.InvokeAsync
-                        );
-                    }
+        return context.Response ?? new HttpResponse(500, "Internal server error");
+    }
 
-                    response = context.Response;
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"Processing error: {ex.InnerException?.ToString() ?? ex.ToString()}");
-                    new InternalError().ExecuteResult(context);
-                    response = context.Response;
-                }
+    private static HttpResponse ToErrorResponse(Exception ex) => ex switch
+    {
+        RequestTooLargeException => new HttpResponse(413, "Content too large"),
+        RequestTimeoutException => new HttpResponse(408, "Request timeout"),
+        BadRequestException => new HttpResponse(400, "Bad request"),
+        _ => new HttpResponse(500, "Internal server error")
+    };
 
-            }
-            catch (ConnectionClosedException)
-            {
-                silent = true;
-            }
-            catch (RequestTooLargeException ex)
-            {
-                Console.WriteLine($"Request rejected: {ex.Message}");
-                response = new HttpResponse(413, "Content too large");
-            }
-            catch (RequestTimeoutException ex)
-            {
-                Console.WriteLine($"Request rejected: {ex.Message}");
-                response = new HttpResponse(408, "Request timeout");
-            }
-            catch (BadRequestException ex)
-            {
-                Console.WriteLine($"Request rejected: {ex.Message}");
-                response = new HttpResponse(400, "Bad request");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Processing error: {ex.Message}");
-                var errorResponse = new HttpResponse(500, "Internal server error");
-                response = errorResponse;
-            }
-            finally
-            {
-                try
-                {
-                    if (!silent)
-                    {
-                        response ??= new HttpResponse(500, "Internal server error");
-                        if (client.IsConnected())
-                            await client.SendResponse(response);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"Send error: {ex.Message}");
-                }
-            }
+    private static async Task SendSafely(NetClient client, HttpResponse response)
+    {
+        try
+        {
+            if (client.IsConnected())
+                await client.SendResponse(response);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Send error: {ex.Message}");
         }
     }
 }

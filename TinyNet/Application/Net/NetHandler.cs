@@ -1,4 +1,4 @@
-﻿using System.Net;
+using System.Net;
 using System.Net.Sockets;
 using TinyNet.Http;
 
@@ -21,8 +21,14 @@ public class NetHandler
 
     }
 
-    public async Task<NetClient> AcceptAsync()
+
+    public NetClient Accept()
     {
-        return new NetClient(await _socket.AcceptAsync(), _limits);
+        var clientSocket = _socket.Accept();
+        clientSocket.SendTimeout = 5000;
+        clientSocket.ReceiveTimeout = 5000;
+        return new NetClient(clientSocket, _limits);
     }
+
+    public void StopListening() => _socket.Dispose();
 }

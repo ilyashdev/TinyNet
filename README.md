@@ -31,8 +31,10 @@ TinyNet is a minimal HTTP server framework that implements the core concepts of 
 - Dependency injection with Singleton, Scoped, and Transient lifetimes
 - Middleware pipeline with per-controller filter support
 - Attribute-based routing and HTTP method mapping
-- Multi-provider configuration system
-- Async request processing via `Channel<T>` + worker pool
+- Multi-provider configuration system with framework defaults
+- Async request processing via a bounded `Channel<T>` and a worker pool
+- Admission control: a dedicated accept thread and an honest `503` under overload
+- Configurable request limits (`413`, `408`, `400`) enforced while reading
 - Static file serving
 
 ---
@@ -89,7 +91,7 @@ public class HelloController : Controller
     "Port": 5000
   },
   "WebRoot": {
-    "Path": "/wwwroot"
+    "Path": "./WebRoot"
   }
 }
 ```
@@ -108,37 +110,58 @@ AppBuilder
             ▼
     WebApplication
             │
-            ├── NetHandler (AcceptAsync)
+            ├── accept thread "tinynet-accept"   — dedicated OS thread
+            │       │  NetHandler.Accept()       — blocking
+            │       ▼
+            ├── Channel<NetClient>               — bounded; full ⇒ 503
             │       │
             │       ▼
-            ├── Channel<NetClient>   — request buffer
-            │       │
-            │       ▼
-            └── Worker Pool (N = ProcessorCount * 2 - 1)
+            └── Worker Pool (N = Server:MaxConcurrentRequests)
                     │
                     ▼
             ProcessClient
-                    ├── DIScope (per-request)
-                    ├── HttpRequest parsing
-                    ├── MiddlewarePipeline.InvokeAsync
-                    │       └── ControllerHandler.Handle
-                    │               ├── Controller resolution (DI)
-                    │               ├── Parameter binding
-                    │               └── Method invocation
-                    └── HttpResponse sending
+                    ├── DIScope (per-connection)
+                    ├── BuildResponse
+                    │       ├── NetClient.GetRequest  — limits, timeout
+                    │       └── Dispatch
+                    │               └── MiddlewarePipeline.InvokeAsync
+                    │                       └── ControllerHandler.Handle
+                    │                               ├── Controller resolution (DI)
+                    │                               ├── Parameter binding
+                    │                               └── Method invocation
+                    └── SendSafely
 ```
 
 ### Request flow
 
-1. `NetHandler.AcceptAsync()` accepts a TCP connection
-2. `NetClient` is written to an unbounded `Channel<NetClient>`
-3. One of N workers reads the client from the channel
-4. A `DIScope` is created for the request lifetime
-5. `HttpRequest` is parsed from raw TCP data
+1. The dedicated accept thread calls the blocking `NetHandler.Accept()`
+2. The `NetClient` is written to a bounded `Channel<NetClient>`. If the channel is full,
+   that thread answers `503` itself and closes the connection
+3. One of N workers takes the client from the channel
+4. A `DIScope` is created for the connection lifetime
+5. `HttpRequest` is read and parsed under `HttpLimits`, producing `413`, `408` or `400`
+   when a limit is exceeded
 6. `MiddlewarePipeline` builds and invokes the middleware chain
 7. `ControllerHandler` resolves the controller via DI, binds parameters, invokes the method
 8. `IActionResult.ExecuteResult` writes the `HttpResponse`
 9. The response is sent over the socket; the socket is closed
+
+### Why accept runs on its own thread
+
+`AcceptLoop` used to be a task on the shared thread pool. When application code blocks a
+pool thread — `Thread.Sleep`, `.Result`, any synchronous wait inside an async handler — the
+pool starves, the accept continuation never gets scheduled, and the server stops accepting.
+The listen backlog then fills and the OS refuses connections at the TCP level, so clients
+see a refused connection instead of a response, and nothing appears in the log.
+
+Since the `503` path lives inside the accept loop, admission control was the first thing to
+die exactly when it was needed. Running accept on its own thread, with a blocking `Accept()`
+and a synchronous `503` write, makes that path independent of application code. This is the
+reactor-and-pool split used by Puma and the boss-and-worker split used by Netty, at the cost
+of one thread. Measurements are in [`TinyNetTestApp/loadtests`](TinyNetTestApp/loadtests/README.md).
+
+Blocking handlers still reduce throughput — worker tasks do run on the pool. What the
+dedicated thread guarantees is that the server degrades honestly and says so.
 
 ---
 
@@ -166,12 +189,14 @@ var builder = new AppBuilder();
 #### `WebApplication`
 
 ```csharp
-await app.Run();
+await app.Run();               // runs until the process is stopped
+await app.Run(cancellation);   // returns once the token is cancelled
 ```
 
 Starts the server. Internally:
-- Spawns an async accept loop writing clients to a `Channel<NetClient>`
-- Starts N worker tasks (`ProcessorCount * 2 - 1`) reading from the channel via `ReadAllAsync`
+- Starts N worker tasks (`Server:MaxConcurrentRequests`) reading from the channel via `ReadAllAsync`
+- Runs the accept loop on a dedicated background thread named `tinynet-accept`
+- On cancellation: stops listening, completes the channel so workers drain it, and returns
 
 ---
 
@@ -340,10 +365,36 @@ Global middlewares run first, then filter middlewares applicable to the matched 
 
 | Provider | Registration |
 |----------|-------------|
-| JSON file | `builder.AddJsonConfig("config.json")` |
+| Framework defaults | automatic |
+| Your own defaults | `builder.AddDefault(key, value)` / `AddDefaults(pairs)` |
+| JSON file | `builder.AddJsonConfig("config.json", optional: false)` |
 | Environment variables | `builder.AddEnvironmentVariables("PREFIX_")` |
 
-Providers added later take priority over earlier ones.
+Providers added later take priority over earlier ones, and defaults are always placed first
+regardless of call order — so the precedence `defaults → json → environment` cannot be broken
+by registering them in the wrong sequence.
+
+#### Framework defaults
+
+`Application/FrameworkDefaults.cs` is the single place where the framework's own defaults
+live. Everything is a configuration key, so every limit can be changed per deployment
+without touching code:
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `Server:Port` | `5000` | listening port |
+| `Server:MaxConcurrentRequests` | `256` | worker count — the concurrency ceiling |
+| `Server:MaxQueuedConnections` | `1024` | channel capacity; full ⇒ `503` |
+| `Server:MaxHeadBytes` | `16384` | request head limit ⇒ `413` |
+| `Server:MaxBodyBytes` | `8388608` | request body limit ⇒ `413` |
+| `Server:ReceiveBufferSize` | `8192` | socket read buffer |
+| `Server:ReadTimeoutSeconds` | `15` | time to send a complete request ⇒ `408` |
+| `WebRoot:Path` | `./WebRoot` | static file root; relative or absolute |
+
+Capacity follows from the first three: the throughput ceiling is
+`MaxConcurrentRequests / handler duration`, and a full queue adds
+`MaxQueuedConnections / MaxConcurrentRequests` seconds of waiting. Both are verified by
+measurement in [`TinyNetTestApp/loadtests`](TinyNetTestApp/loadtests/README.md).
 
 #### Accessing configuration
 
@@ -449,7 +500,7 @@ Configure the web root in `config.json`:
 ```json
 {
   "WebRoot": {
-    "Path": "/wwwroot"
+    "Path": "./WebRoot"
   }
 }
 ```

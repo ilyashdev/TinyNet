@@ -3,7 +3,8 @@ using TinyNetTestApp;
 
 var builder = new AppBuilder();
 builder
-    .AddJsonConfig("config.json");
+    .AddJsonConfig("config.json")
+    .AddEnvironmentVariables("TINYNET_");
 
 builder.Services.AddSingleton<SingletonService>();
 

@@ -19,21 +19,22 @@ public class NetClient : IDisposable
         _limits = limits;
     }
 
-    public async Task<HttpRequest> GetRequest()
+    public async Task<HttpRequest> GetRequest(CancellationToken ct = default)
     {
-        using var timeout = new CancellationTokenSource(_limits.ReadTimeout);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(_limits.ReadTimeout);
         try
         {
-            return await GetRequest(timeout.Token);
+            return await ReadRequest(timeout.Token);
         }
-        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
             throw new RequestTimeoutException(
                 $"Client did not send a complete request within {_limits.ReadTimeout.TotalSeconds:0} s");
         }
     }
 
-    public async Task<HttpRequest> GetRequest(CancellationToken token)
+    private async Task<HttpRequest> ReadRequest(CancellationToken token)
     {
         var buffer = new byte[_limits.ReceiveBufferSize];
         using var accumulated = new MemoryStream();
@@ -184,10 +185,12 @@ public class NetClient : IDisposable
         }
     }
 
-    public async Task SendOverloadedResponse()
+
+    public void SendOverloadedResponse()
     {
         var response = new HttpResponse(503, "Service Unavailable");
-        await _clientSocket.SendAsync(Encoding.UTF8.GetBytes(response.ToHttpResponse()));
+        _clientSocket.SendTimeout = 250;
+        _clientSocket.Send(Encoding.UTF8.GetBytes(response.ToHttpResponse()));
         ShutdownQuietly();
     }
 
