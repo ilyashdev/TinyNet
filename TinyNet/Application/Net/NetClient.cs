@@ -11,15 +11,17 @@ public class NetClient : IDisposable
     private static readonly byte[] CrLf = "\r\n"u8.ToArray();
 
     private Socket _clientSocket;
+    private readonly HttpLimits _limits;
 
-    public NetClient(Socket clientSocket)
+    public NetClient(Socket clientSocket, HttpLimits limits)
     {
         _clientSocket = clientSocket;
+        _limits = limits;
     }
 
     public async Task<HttpRequest> GetRequest()
     {
-        using var timeout = new CancellationTokenSource(HttpLimits.ReadTimeout);
+        using var timeout = new CancellationTokenSource(_limits.ReadTimeout);
         try
         {
             return await GetRequest(timeout.Token);
@@ -27,13 +29,13 @@ public class NetClient : IDisposable
         catch (OperationCanceledException) when (timeout.IsCancellationRequested)
         {
             throw new RequestTimeoutException(
-                $"Client did not send a complete request within {HttpLimits.ReadTimeout.TotalSeconds:0} s");
+                $"Client did not send a complete request within {_limits.ReadTimeout.TotalSeconds:0} s");
         }
     }
 
     public async Task<HttpRequest> GetRequest(CancellationToken token)
     {
-        var buffer = new byte[HttpLimits.ReceiveBufferSize];
+        var buffer = new byte[_limits.ReceiveBufferSize];
         using var accumulated = new MemoryStream();
 
         int headEnd = -1;
@@ -42,8 +44,8 @@ public class NetClient : IDisposable
         {
             await FillAsync(accumulated, buffer, token);
 
-            if (accumulated.Length > HttpLimits.MaxHeadBytes)
-                throw new RequestTooLargeException($"Request head exceeds {HttpLimits.MaxHeadBytes} bytes");
+            if (accumulated.Length > _limits.MaxHeadBytes)
+                throw new RequestTooLargeException($"Request head exceeds {_limits.MaxHeadBytes} bytes");
 
             headEnd = IndexOf(accumulated.GetBuffer(), (int)accumulated.Length, HeadSeparator, searchFrom);
             searchFrom = Math.Max(0, (int)accumulated.Length - (HeadSeparator.Length - 1));
@@ -75,8 +77,8 @@ public class NetClient : IDisposable
     private async Task<string> ReadFixedBodyAsync(
         MemoryStream accumulated, byte[] buffer, int bodyStart, int contentLength, CancellationToken token)
     {
-        if (contentLength > HttpLimits.MaxBodyBytes)
-            throw new RequestTooLargeException($"Body exceeds {HttpLimits.MaxBodyBytes} bytes");
+        if (contentLength > _limits.MaxBodyBytes)
+            throw new RequestTooLargeException($"Body exceeds {_limits.MaxBodyBytes} bytes");
 
         long required = (long)bodyStart + contentLength;
         while (accumulated.Length < required)
@@ -108,8 +110,8 @@ public class NetClient : IDisposable
             if (chunkSize == 0)
                 break;
 
-            if (body.Length + chunkSize > HttpLimits.MaxBodyBytes)
-                throw new RequestTooLargeException($"Body exceeds {HttpLimits.MaxBodyBytes} bytes");
+            if (body.Length + chunkSize > _limits.MaxBodyBytes)
+                throw new RequestTooLargeException($"Body exceeds {_limits.MaxBodyBytes} bytes");
 
             long required = (long)cursor + chunkSize + CrLf.Length;
             while (accumulated.Length < required)
@@ -131,7 +133,7 @@ public class NetClient : IDisposable
             if (index >= 0)
                 return index;
 
-            if (accumulated.Length > HttpLimits.MaxHeadBytes + HttpLimits.MaxBodyBytes)
+            if (accumulated.Length > _limits.MaxHeadBytes + _limits.MaxBodyBytes)
                 throw new RequestTooLargeException("Chunked body exceeds allowed size");
 
             await FillAsync(accumulated, buffer, token);

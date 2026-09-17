@@ -1,6 +1,7 @@
 using TinyNet.Configurations;
 using TinyNet.Controllers;
 using TinyNet.DI;
+using TinyNet.Http;
 using TinyNet.Middlewares;
 
 namespace TinyNet.Application;
@@ -65,7 +66,7 @@ public class AppBuilder
         
         Services.AddInstance(conf);
         Services.AddTransient<MediaHandler>();
-        _netHandler = new(conf.GetValue<int>(FrameworkDefaults.ServerPort));
+        _netHandler = new(conf.GetValue<int>(FrameworkDefaults.ServerPort), ReadHttpLimits(conf));
         var controllerHandler = new ControllerHandler(Services);
             controllerHandler.InitControllers();
         return new WebApplication(
@@ -75,4 +76,12 @@ public class AppBuilder
             conf
         );
     }
+
+    private static HttpLimits ReadHttpLimits(IConfiguration conf) =>
+        new(
+            conf.GetValue<int>(FrameworkDefaults.ServerMaxHeadBytes),
+            conf.GetValue<int>(FrameworkDefaults.ServerMaxBodyBytes),
+            conf.GetValue<int>(FrameworkDefaults.ServerReceiveBufferSize),
+            TimeSpan.FromSeconds(conf.GetValue<int>(FrameworkDefaults.ServerReadTimeoutSeconds))
+        );
 }

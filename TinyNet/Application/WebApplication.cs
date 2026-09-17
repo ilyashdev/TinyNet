@@ -1,4 +1,4 @@
-﻿using System.Threading.Channels;
+using System.Threading.Channels;
 using TinyNet.ActionResult.Results;
 using TinyNet.Configurations;
 using TinyNet.Controllers;
@@ -31,16 +31,17 @@ public class WebApplication
     {
         Console.WriteLine($"Application started on http://localhost:{_configuration["Server:Port"]}");
         var channel = Channel.CreateBounded<NetClient>(
-            new BoundedChannelOptions(HttpLimits.MaxQueuedConnections)
+            new BoundedChannelOptions(_configuration.GetValue<int>(FrameworkDefaults.ServerMaxQueuedConnections))
             {
                 FullMode = BoundedChannelFullMode.Wait,
                 SingleWriter = true
             });
         var acceptLoop = AcceptLoop(channel);
-        int workerCount = Environment.ProcessorCount * 2 - 1;                                                                                                                                                                                         
-        var workers = Enumerable.Range(0, workerCount)                                                                                                                                                                                                
-            .Select(_ => Worker(channel));                                                                                                                                                                                                                                      
-        await Task.WhenAll(workers.Append(acceptLoop));  
+        var workers = Enumerable
+            .Range(0, _configuration.GetValue<int>(FrameworkDefaults.ServerMaxConcurrentRequests))
+            .Select(_ => Worker(channel))
+            .ToArray();
+        await Task.WhenAll(workers.Append(acceptLoop));
     }
 
     private async Task Worker(Channel<NetClient> channel)
