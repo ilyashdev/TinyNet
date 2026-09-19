@@ -10,7 +10,8 @@ namespace TinyNet.Controllers;
 
 public class ControllerHandler
 {
-    private Dictionary<string, Type> _controllers = new();
+    private List<(string, Type)> _controllers = new();
+    private UrlRouter? _router;
     private DIContainer _container;
     private bool _initstate = false;
     
@@ -49,23 +50,22 @@ public class ControllerHandler
                         throw new InvalidOperationException(
                             $"Controller {controllerType.Name} is missing [Route] attribute");
             _container.AddTransient(controllerType);
-            _controllers.Add(
-                route, 
-                controllerType
-                );
+            _controllers.Add( (route,controllerType));
         }
+        _router = new UrlRouter(_controllers);
     }
 
     public HandleResult<Type> GetTypeHandler(string url)
     {
-        if (url.Contains("."))
-            return new HandleResult<Type>(typeof(MediaHandler));
-        if (!_controllers.TryGetValue(url, out var type))
-            return new HandleResult<Type>(HandleResultStatus.NotFound);
+        if (_router is null)
+            throw new Exception("controllers are not initialized");
+        var type = _router.GetControllerType(url);
+        if (type is null)
+            return new HandleResult<Type>(typeof(MediaHandler)); // фикс заплатка. позже переписать под middlewares
         return new HandleResult<Type>(type);
     }
 
-       public Controller? GetController(string url, DIScope scope)                                                                                                                                                                                       
+    public Controller? GetController(string url, DIScope scope)                                                                                                                                                                                       
     {                                                                                                                                                                                                                                                 
         var type = GetTypeHandler(url);                                                                                                                                                                                                               
         if (type.Status != HandleResultStatus.Success)                                                                                                                                                                                                
@@ -151,5 +151,6 @@ public class ControllerHandler
             throw new Exception(ex.InnerException?.Message ?? "Unknown error");
         }
     }
+    
 }
 

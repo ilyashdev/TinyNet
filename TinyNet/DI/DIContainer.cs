@@ -55,6 +55,43 @@ public class DIContainer
             throw new Exception($"Service type {serviceType} is already registered");
         _descriptors[serviceType] = new ServiceDescriptor(serviceType, implementationType, lifetime);
     }
+
+    public void Validate()
+    {
+        foreach (var descriptor in _descriptors.Values)
+        {
+            if (descriptor.Lifetime != ServiceLifetime.Singleton)
+                continue;
+            if (_singletonInstances.ContainsKey(descriptor.ServiceType))
+                continue;
+            ValidateDependencies(descriptor, new List<ServiceDescriptor> { descriptor }, new HashSet<Type>());
+        }
+    }
+
+    private void ValidateDependencies(ServiceDescriptor descriptor, List<ServiceDescriptor> chain, HashSet<Type> visited)
+    {
+        if (!visited.Add(descriptor.ImplementationType))
+            return;
+        var ctor = descriptor.ImplementationType.GetConstructors()
+            .OrderByDescending(c => c.GetParameters().Length)
+            .FirstOrDefault();
+        if (ctor is null)
+            return;
+        foreach (var parameter in ctor.GetParameters())
+        {
+            if (!_descriptors.TryGetValue(parameter.ParameterType, out var dependency))
+                continue;
+            chain.Add(dependency);
+            if (dependency.Lifetime == ServiceLifetime.Scoped)
+                throw new InvalidOperationException($"Captive dependency: {FormatChain(chain)}");
+            if (dependency.Lifetime == ServiceLifetime.Transient)
+                ValidateDependencies(dependency, chain, visited);
+            chain.RemoveAt(chain.Count - 1);
+        }
+    }
+
+    private static string FormatChain(IEnumerable<ServiceDescriptor> chain)
+        => string.Join(" -> ", chain.Select(d => $"{d.ServiceType.Name} ({d.Lifetime})"));
     public Object GetService(Type serviceType, DIScope scope) 
         => GetService(serviceType, scope, new());
 

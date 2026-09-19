@@ -69,6 +69,7 @@ public class AppBuilder
         _netHandler = new(conf.GetValue<int>(FrameworkDefaults.ServerPort), ReadHttpLimits(conf));
         var controllerHandler = new ControllerHandler(Services);
             controllerHandler.InitControllers();
+        Services.Validate();
         return new WebApplication(
             _netHandler,
             controllerHandler,

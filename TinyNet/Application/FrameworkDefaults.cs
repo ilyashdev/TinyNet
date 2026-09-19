@@ -9,6 +9,10 @@ public static class FrameworkDefaults
     public const string ServerMaxBodyBytes = "Server:MaxBodyBytes";
     public const string ServerReceiveBufferSize = "Server:ReceiveBufferSize";
     public const string ServerReadTimeoutSeconds = "Server:ReadTimeoutSeconds";
+
+    public const string ServerKeepAliveMax = "Server:KeepAliveMax";
+    public const string ServerKeepAliveTimeout = "Server:KeepAliveTimeout";
+    
     public const string WebRootPath = "WebRoot:Path";
 
     public static readonly KeyValuePair<string, string>[] All =
@@ -20,6 +24,10 @@ public static class FrameworkDefaults
         new(ServerMaxBodyBytes, "8388608"),
         new(ServerReceiveBufferSize, "8192"),
         new(ServerReadTimeoutSeconds, "15"),
+        
+        new(ServerKeepAliveMax, "1000"),
+        new(ServerKeepAliveTimeout, "5"),
+        
         new(WebRootPath, "./WebRoot")
     ];
 }

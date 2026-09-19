@@ -68,7 +68,19 @@ public static class Http
             url = url.Substring(0, queryIndex);
         }
 
-        return new HttpRequest(method, url, headers, query, null);
+        return new HttpRequest(method, url, headers, query, null) { Protocol = startLine[2] };
+    }
+
+    public static bool IsKeepAlive(HttpRequest request)
+    {
+        var http11 = string.Equals(request.Protocol, "HTTP/1.1", StringComparison.OrdinalIgnoreCase);
+        if (!request.Headers.TryGetValue("Connection", out var connection))
+            return http11;
+        if (connection.Contains("close", StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (connection.Contains("keep-alive", StringComparison.OrdinalIgnoreCase))
+            return true;
+        return http11;
     }
 
     public static JsonObject ParseBody(string bodyText)

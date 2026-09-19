@@ -121,23 +121,44 @@ public class WebApplication
     
     private async Task ProcessClient(NetClient client, CancellationToken ct)
     {
+        var keepAliveMax = _configuration.GetValue<int>(FrameworkDefaults.ServerKeepAliveMax);
+        var keepAliveTimeout = TimeSpan.FromSeconds(_configuration.GetValue<int>(FrameworkDefaults.ServerKeepAliveTimeout));
         using (client)
-        using (DIScope scope = new())
         {
-            var response = await BuildResponse(client, scope, ct);
-            if (response is null)
-                return;
+            for (int remaining = keepAliveMax; remaining > 0; remaining--)
+            {
+                using (DIScope scope = new())
+                {
+                    var idleTimeout = remaining == keepAliveMax ? (TimeSpan?)null : keepAliveTimeout;
+                    var response = await BuildResponse(client, scope, idleTimeout, remaining > 1, ct);
+                    if (response is null)
+                        return;
 
-            await SendSafely(client, response);
+                    await SendSafely(client, response);
+                    if (!IsKeepAlive(response))
+                        return;
+                }
+            }
         }
     }
 
-    private async Task<HttpResponse?> BuildResponse(NetClient client, DIScope scope, CancellationToken ct)
+    private static bool IsKeepAlive(HttpResponse response)
+        => response.Headers.TryGetValue("Connection", out var connection)
+           && connection.Equals("keep-alive", StringComparison.OrdinalIgnoreCase);
+
+    private async Task<HttpResponse?> BuildResponse(
+        NetClient client, DIScope scope, TimeSpan? idleTimeout, bool allowKeepAlive, CancellationToken ct)
     {
         try
         {
-            HttpRequest request = await client.GetRequest(ct);
-            return await Dispatch(new HttpContext(request, null, ct), scope);
+            HttpRequest request = idleTimeout is null
+                ? await client.GetRequest(ct)
+                : await client.GetRequest(idleTimeout.Value, ct);
+            var response = await Dispatch(new HttpContext(request, null, ct), scope);
+            if (!response.Headers.ContainsKey("Connection"))
+                response.Headers["Connection"] =
+                    allowKeepAlive && Http.Http.IsKeepAlive(request) ? "keep-alive" : "close";
+            return response;
         }
         catch (ConnectionClosedException)
         {

@@ -25,7 +25,13 @@ k6 run -e PROFILE=io    io-vs-block.js
 k6 run -e PROFILE=block io-vs-block.js
 k6 run -e MODE=clean    errors.js
 k6 run -e MODE=oversize errors.js
+k6 run -e RATE=110000 -e VUS=1024 -e DURATION=10s saturation.js
 ```
+
+`saturation.js` is the flat-out one: a `constant-arrival-rate` executor with a fixed VU pool,
+used to find the throughput ceiling and the point where refusals begin. `RATE`, `VUS`,
+`DURATION` and `TARGET` (default `/load/io?ms=0`) are all env knobs; `NOREUSE=1` turns off
+connection reuse, which turns the scenario into a fresh-connection storm.
 
 Point them elsewhere with `-e BASE_URL=http://host:port`.
 
@@ -77,19 +83,27 @@ That is not "instant", it is below the measurable resolution. Compare by `p(99)`
 and actual RPS instead.
 
 **Where server time lives.** `http_req_duration` includes connection setup. The server's
-own work is `http_req_waiting` (TTFB). Until keep-alive exists, every request pays for a
-TCP handshake, and that is not the framework's fault.
+own work is `http_req_waiting` (TTFB). With keep-alive the handshake is paid once per
+connection instead of once per request, so the two readings are now close.
 
-**Ephemeral ports are the bench's real limit.** Connections are never reused (the server
-answers `Connection: close`), so each request burns a port that then sits in TIME_WAIT for
-minutes. The default range is 16384 ports:
+**Size the worker pool by connections, not by rate.** A worker owns a connection for its
+whole life, so `Server:MaxConcurrentRequests` is the number of simultaneous clients. Give the
+run fewer VUs than workers, or you are measuring the queue rather than the server: 1024 VUs
+against 256 workers answered 200 rps out of 500 offered, at `p(95) = 22.96 s`, with no `503`
+and nothing in the server log.
+
+**Ephemeral ports matter only without reuse.** With keep-alive a connection carries up to
+`Server:KeepAliveMax` requests, so a normal run burns few ports — 10k requests left 22 sockets
+in TIME_WAIT at `KeepAliveMax=1000` against 12625 with keep-alive off. Under `NOREUSE=1`, or
+with a low `KeepAliveMax`, the old limit is back: each request burns a port that then sits in
+TIME_WAIT for minutes. The default range is 16384 ports:
 
 ```bash
 netsh int ipv4 show dynamicport tcp                       # the range
 powershell "(Get-NetTCPConnection -State TimeWait).Count"  # how many are held
 ```
 
-Keep a run under ~15000 requests and pause between runs, or widen the range (requires an
+Keep such a run under ~15000 requests and pause between runs, or widen the range (requires an
 administrator and changes a system setting until reboot):
 
 ```
@@ -106,7 +120,57 @@ architectural conclusions from `io` and `block`.
 
 ## Results
 
-16 logical cores, measured 2026-09-17.
+16 logical cores, measured 2026-09-17 and 2026-09-18.
+
+### The ceiling is ~90k rps, and it is not where refusals start
+
+Measured 2026-09-18 on `/load/io?ms=0` (a 23-byte JSON body), keep-alive `1000/5`, N = 2048,
+queue = 2048, `ReceiveBufferSize` = 4096.
+
+| Offered | Served | p(95) | `503` | connect-level refusals |
+|---|---|---|---|---|
+| 60 000 | 59 673 | 2.06 ms | 0 | 298 |
+| 90 000 | 84 543 | 11.95 ms | 0 | 794 |
+| **110 000** | **91 356** | 13.24 ms | 0 | 841 |
+| 130 000 | 80 361 | 38.30 ms | 0 | 3 330 |
+| 150 000 | 84 287 | 35.76 ms | 0 | 2 914 |
+
+Throughput saturates near **90k rps**; past that only latency grows. Note the `503` column:
+over established connections the server does not refuse anything, it slows down. The
+connect-level column is the RST storm when a thousand VUs dial at once against `Listen(1000)`,
+not an HTTP answer. k6 shares the machine and stops delivering at the top rows
+(`dropped_iterations` reached 655k), so 90k is a floor for the server, not its limit.
+
+Refusals are governed by **connections**, not by rate. Capacity is
+`MaxConcurrentRequests + MaxQueuedConnections`, and crossing it produces honest `503`s:
+
+| Capacity | Clients | `200` | `503` |
+|---|---|---|---|
+| 64 + 64 | 512 | 3 648 | 21 341 |
+| 256 + 256 | 1 024 | 16 873 | 33 004 |
+
+Of the tunables only the worker count matters, and only through that rule: at 512 VUs the
+settings 512, 1024 and 2048 gave 59 673 / 59 715 / 59 730 rps. `ReceiveBufferSize` of 4096,
+8192 and 32768 landed within noise of each other (341 / 365 / 344 µs average).
+
+### Keep-alive settings: the idle timeout is what matters
+
+Same offered load, 256 clients against 64 workers — the regime where connections outnumber
+slots:
+
+| `KeepAliveTimeout` | Served | max latency |
+|---|---|---|
+| 2 s | 908 rps | 8.89 s |
+| 5 s | 500 rps | 16.70 s |
+| 15 s | 282 rps | 19.92 s + client timeouts |
+
+`KeepAliveMax` does not participate: at a 2 s timeout, 100, 1000 and 10000 all produced the
+same 907 rps. It does matter for port churn and for the ceiling — 10k requests left 2588
+sockets in TIME_WAIT at `max=4` against 22 at `max=1000`, and a sustained run at `max=100`
+burned 8607 ports in ten seconds while dropping the ceiling from 91k to 85k rps.
+
+The reason a short idle timeout wins under overload: a queued connection whose client has
+already given up still costs a worker the full timeout once it is finally picked up.
 
 ### Capacity follows a formula
 
