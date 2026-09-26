@@ -1,8 +1,39 @@
 # TinyNet
 
-An HTTP web framework written from scratch in C# on .NET 10.
+A bloat-free web framework for .NET 10, written from scratch around one idea: **explicit
+control**. Everything that happens to a request is written in your code — not decided by
+conventions, binding or scanning somewhere out of sight.
 
 [Русская версия](README.ru.md)
+
+---
+
+## Why
+
+Large frameworks do a lot for you, and much of it happens where you cannot see it: model
+binding picks values, conventions pick handlers, scanning picks up classes, exceptions turn
+into responses in a distant handler. Several ways to configure the same thing affect each
+other. When the result is wrong, you debug the framework instead of your application.
+
+TinyNet goes the other way:
+
+- **Explicit control flow.** A request goes through the route tree, the filters you attached
+  and the handler you wrote. A handler reads the values it needs from `HttpContext`, gets
+  `null` when they are missing or malformed, and decides the answer itself. No exception
+  becomes a response somewhere else.
+- **One way to do each thing.** Routes are declared in one tree in `Program.cs`, request data
+  is read from one place, filters are attached in one way. Two ways to do the same thing are
+  treated as a bug.
+- **No bloat.** Its own HTTP server, DI container, configuration and pipeline in about
+  2 000 lines, with no NuGet dependencies and no ASP.NET underneath. What is not needed is not
+  there.
+- **The framework decides what is not worth choosing.** Lifetimes of controllers, filters and
+  middleware are fixed, and so is the concurrency model.
+- **Checked before the first request.** The compiler checks that a route points to a handler
+  that exists; `Build()` checks routes, filters and service lifetimes before the server
+  accepts a connection.
+- **Visible overload.** Connections are accepted on a dedicated thread into a bounded queue;
+  when the server is full, clients get `503`, not a dropped connection.
 
 ---
 
