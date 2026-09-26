@@ -1,25 +1,11 @@
 using TinyNet.ActionResult;
 using TinyNet.ActionResult.Results;
 using TinyNet.Controllers;
+using TinyNet.Http;
 
 namespace TinyNet.Tests;
 
-[Route("/query-string")]
-public class QueryStringController : Controller
-{
-    [HttpMethod("GET")]
-    public IActionResult Get([FromQuery] string term) => new Ok(new { term });
-}
-
-[Route("/body")]
-public class BodyController : Controller
-{
-    [HttpMethod("POST")]
-    public IActionResult Post([FromBody] string name) => new Ok(new { name });
-}
-
-[Route("/slow")]
-public class SlowController : Controller
+public class SlowController : IGetHandler
 {
     internal static TaskCompletionSource Entered = NewSource();
     internal static TaskCompletionSource Release = NewSource();
@@ -33,8 +19,7 @@ public class SlowController : Controller
     private static TaskCompletionSource NewSource()
         => new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    [HttpMethod("GET")]
-    public async Task<IActionResult> Get()
+    public async Task<IActionResult> Get(HttpContext context)
     {
         Entered.TrySetResult();
         await Release.Task;

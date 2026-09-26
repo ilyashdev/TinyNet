@@ -18,6 +18,7 @@ public class OverloadTests
         builder.AddDefault(FrameworkDefaults.ServerPort, "0");
         builder.AddDefault(FrameworkDefaults.ServerMaxConcurrentRequests, "1");
         builder.AddDefault(FrameworkDefaults.ServerMaxQueuedConnections, "1");
+        builder.Routes.AddGroup("/slow").AddGetHandler<SlowController>();
         var app = builder.Build();
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));

@@ -84,8 +84,8 @@ public class NetClient : IDisposable
             requestEnd = bodyStart + contentLength;
         }
 
-        request.Body = Http.Http.ParseBody(bodyText);
         Consume(requestEnd);
+        request.Body = Http.Http.ParseBody(bodyText, request.Headers);
         return request;
     }
 

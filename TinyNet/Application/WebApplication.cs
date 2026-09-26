@@ -2,11 +2,9 @@ using System.Net.Sockets;
 using System.Threading.Channels;
 using TinyNet.ActionResult.Results;
 using TinyNet.Configurations;
-using TinyNet.Controllers;
 using TinyNet.DI;
 using TinyNet.Http;
 using TinyNet.Middlewares;
-using TinyNet.TaskResult;
 
 
 
@@ -16,18 +14,18 @@ public class WebApplication
 {
     private readonly NetHandler _handler;
     private readonly MiddlewarePipeline _pipeline;
-    private readonly ControllerHandler _controllerHandler;
     private readonly IConfiguration _configuration;
+    private readonly DIContainer _container;
     public WebApplication(
-        NetHandler handler, 
-        ControllerHandler controllerHandler, 
-        MiddlewarePipeline pipeline, 
-        IConfiguration configuration)
+        NetHandler handler,
+        MiddlewarePipeline pipeline,
+        IConfiguration configuration,
+        DIContainer container)
     {
         _handler = handler;
-        _controllerHandler = controllerHandler;
         _pipeline = pipeline;
         _configuration = configuration;
+        _container = container;
     }
 
   
@@ -127,7 +125,7 @@ public class WebApplication
         {
             for (int remaining = keepAliveMax; remaining > 0; remaining--)
             {
-                using (DIScope scope = new())
+                using (DIScope scope = _container.CreateScope())
                 {
                     var idleTimeout = remaining == keepAliveMax ? (TimeSpan?)null : keepAliveTimeout;
                     var response = await BuildResponse(client, scope, idleTimeout, remaining > 1, ct);
@@ -154,7 +152,7 @@ public class WebApplication
             HttpRequest request = idleTimeout is null
                 ? await client.GetRequest(ct)
                 : await client.GetRequest(idleTimeout.Value, ct);
-            var response = await Dispatch(new HttpContext(request, null, ct), scope);
+            var response = await Dispatch(new HttpContext(scope, request, ct));
             if (!response.Headers.ContainsKey("Connection"))
                 response.Headers["Connection"] =
                     allowKeepAlive && Http.Http.IsKeepAlive(request) ? "keep-alive" : "close";
@@ -178,20 +176,11 @@ public class WebApplication
         }
     }
 
-    private async Task<HttpResponse> Dispatch(HttpContext context, DIScope scope)
+    private async Task<HttpResponse> Dispatch(HttpContext context)
     {
         try
         {
-            var controllerType = _controllerHandler.GetTypeHandler(context.Request!.Url);
-            if (controllerType.Status != HandleResultStatus.Success)
-            {
-                new NotFound(controllerType.Status).ExecuteResult(context);
-            }
-            else
-            {
-                var adapter = new MiddlewareControllerAdapter(_controllerHandler, scope);
-                await _pipeline.InvokeAsync(context, controllerType.Result, scope, adapter.InvokeAsync);
-            }
+            await _pipeline.InvokeAsync(context);
         }
         catch (Exception ex)
         {

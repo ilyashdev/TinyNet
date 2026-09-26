@@ -24,6 +24,7 @@ public class RequestReadingTests
             const string body = """{"name":"Bob"}""";
             var raw = "POST /echo?x=1 HTTP/1.1\r\n" +
                       "Host: localhost\r\n" +
+                      "Content-Type: application/json\r\n" +
                       $"Content-Length: {Encoding.UTF8.GetByteCount(body)}\r\n" +
                       "\r\n" +
                       body;

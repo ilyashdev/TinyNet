@@ -10,11 +10,18 @@ public class DependencyInjectionTests
 
     public class TransientService;
 
-    public class SingletonHoldingScoped
+    public class TransientHoldingScoped
     {
-        public SingletonHoldingScoped(ScopedService dependency) => Dependency = dependency;
+        public TransientHoldingScoped(ScopedService dependency) => Dependency = dependency;
 
         public ScopedService Dependency { get; }
+    }
+
+    public class SingletonHoldingTransient
+    {
+        public SingletonHoldingTransient(TransientHoldingScoped dependency) => Dependency = dependency;
+
+        public TransientHoldingScoped Dependency { get; }
     }
 
     [Fact]
@@ -25,8 +32,8 @@ public class DependencyInjectionTests
         container.AddScoped<ScopedService>();
         container.AddTransient<TransientService>();
 
-        using var first = new DIScope();
-        using var second = new DIScope();
+        using var first = container.CreateScope();
+        using var second = container.CreateScope();
 
         Assert.Same(
             container.GetService(typeof(SingletonService), first),
@@ -46,20 +53,15 @@ public class DependencyInjectionTests
     }
 
     [Fact]
-    public void Singleton_DependingOnScoped_CapturesInstanceOfFirstScope()
+    public void Validate_SingletonReachingScopedThroughTransient_Throws()
     {
         var container = new DIContainer();
-        container.AddSingleton<SingletonHoldingScoped>();
+        container.AddSingleton<SingletonHoldingTransient>();
+        container.AddTransient<TransientHoldingScoped>();
         container.AddScoped<ScopedService>();
 
-        using var first = new DIScope();
-        using var second = new DIScope();
+        var error = Assert.Throws<InvalidOperationException>(container.Validate);
 
-        var holder = (SingletonHoldingScoped)container.GetService(typeof(SingletonHoldingScoped), first);
-        var scopedInFirst = container.GetService(typeof(ScopedService), first);
-        var scopedInSecond = container.GetService(typeof(ScopedService), second);
-
-        Assert.Same(scopedInFirst, holder.Dependency);
-        Assert.NotSame(scopedInSecond, holder.Dependency);
+        Assert.Contains("Captive", error.Message);
     }
 }

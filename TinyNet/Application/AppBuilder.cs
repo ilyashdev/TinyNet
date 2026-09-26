@@ -1,14 +1,16 @@
+using TinyNet.ActionResult.Results;
 using TinyNet.Configurations;
-using TinyNet.Controllers;
 using TinyNet.DI;
 using TinyNet.Http;
 using TinyNet.Middlewares;
+using TinyNet.Routing;
 
 namespace TinyNet.Application;
 
 public class AppBuilder
 {
     public DIContainer Services { get; init; }
+    public GroupRoute Routes { get; } = new("/");
     private NetHandler _netHandler;
     private ConfigurationBuilder _configBuilder { get; init; }
     private MiddlewarePipeline _pipeline { get; init; }
@@ -45,37 +47,39 @@ public class AppBuilder
         return this;
     }
 
-    public AppBuilder RegisterMiddleware<T>() where T : Middleware
+    public AppBuilder RegisterMiddleware<T>() where T : IMiddleware
     {
         _pipeline.RegisterMiddleware<T>();
         return this;
     }
 
-    public AppBuilder RegisterFilter<T>() where T : Middleware
-    {
-        _pipeline.RegisterFilter<T>();
-        return this;
-    }
-
     public WebApplication Build()
     {
-        var conf = 
+        var conf =
             _configBuilder
-                
+
                 .Build();
-        
+
         Services.AddInstance(conf);
-        Services.AddTransient<MediaHandler>();
         _netHandler = new(conf.GetValue<int>(FrameworkDefaults.ServerPort), ReadHttpLimits(conf));
-        var controllerHandler = new ControllerHandler(Services);
-            controllerHandler.InitControllers();
+        var endpoints = RouteCompiler.Compile(Routes, Services);
+        var router = new UrlRouter(endpoints);
         Services.Validate();
+        foreach (var endpoint in endpoints)
+            endpoint.Link(Services);
+        _pipeline.Build(new RouteDispatcher(router, NotFound).InvokeAsync);
         return new WebApplication(
             _netHandler,
-            controllerHandler,
             _pipeline,
-            conf
+            conf,
+            Services
         );
+    }
+
+    private static Task NotFound(HttpContext context)
+    {
+        new NotFound().ExecuteResult(context);
+        return Task.CompletedTask;
     }
 
     private static HttpLimits ReadHttpLimits(IConfiguration conf) =>

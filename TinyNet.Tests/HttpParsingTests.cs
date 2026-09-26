@@ -15,6 +15,25 @@ public class HttpParsingTests
         Assert.Equal("abc==", request.Query["token"]);
     }
 
+    [Theory]
+    [InlineData("{broken")]
+    [InlineData("[1, 2]")]
+    [InlineData("null")]
+    public void ParseBody_JsonContentTypeWithInvalidObject_IsRejected(string body)
+    {
+        var headers = new Dictionary<string, string> { ["Content-Type"] = "application/json; charset=utf-8" };
+
+        Assert.Throws<BadRequestException>(() => HttpParser.ParseBody(body, headers));
+    }
+
+    [Fact]
+    public void ParseBody_OtherContentType_IsNotParsedAsJson()
+    {
+        var headers = new Dictionary<string, string> { ["Content-Type"] = "text/plain" };
+
+        Assert.Null(HttpParser.ParseBody("{broken", headers));
+    }
+
     [Fact]
     public void ToHttpResponse_ContentLength_IsMeasuredInBytes()
     {

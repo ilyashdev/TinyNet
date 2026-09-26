@@ -1,5 +1,6 @@
 using TinyNet.Configurations;
 using TinyNet.Controllers;
+using TinyNet.DI;
 using TinyNet.Http;
 
 namespace TinyNet.Tests;
@@ -59,10 +60,9 @@ public class StaticFileTests : IDisposable
             .Build();
 
         var handler = new MediaHandler(configuration);
-        var context = new HttpContext(new HttpRequest("GET", url, new(), new(), null));
-        handler.SetContext(context);
+        var context = new HttpContext(new DIContainer().CreateScope(), new HttpRequest("GET", url, new(), new(), null));
 
-        var result = await handler.Get();
+        var result = await handler.Get(context);
         result.ExecuteResult(context);
 
         return context.Response!;

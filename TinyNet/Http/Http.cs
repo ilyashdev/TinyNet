@@ -18,7 +18,7 @@ public static class Http
         var bodyText = separator < 0 ? null : rawRequest.Substring(separator + HeadSeparator.Length);
 
         var request = ParseHead(headText);
-        request.Body = ParseBody(bodyText);
+        request.Body = ParseBody(bodyText, request.Headers);
         return request;
     }
 
@@ -60,7 +60,7 @@ public static class Http
                 if (pair.Length == 0)
                     continue;
 
-                var parts = pair.Split('=');
+                var parts = pair.Split('=', 2);
                 var key = Uri.UnescapeDataString(parts[0]);
                 query[key] = parts.Length > 1 ? Uri.UnescapeDataString(parts[1]) : "";
             }
@@ -83,19 +83,29 @@ public static class Http
         return http11;
     }
 
-    public static JsonObject ParseBody(string bodyText)
+    public static JsonObject? ParseBody(string? bodyText, IReadOnlyDictionary<string, string> headers)
     {
-        if (string.IsNullOrWhiteSpace(bodyText))
+        if (string.IsNullOrWhiteSpace(bodyText) || !IsJson(headers))
             return null;
 
         try
         {
-            return JsonSerializer.Deserialize<JsonObject>(bodyText);
+            return JsonSerializer.Deserialize<JsonObject>(bodyText)
+                   ?? throw new BadRequestException("JSON body must be an object");
         }
         catch (JsonException)
         {
-            return null;
+            throw new BadRequestException("JSON body is malformed or is not an object");
         }
+    }
+
+    private static bool IsJson(IReadOnlyDictionary<string, string> headers)
+    {
+        if (!headers.TryGetValue("Content-Type", out var contentType))
+            return false;
+        var mediaType = contentType.Split(';', 2)[0].Trim();
+        return mediaType.Equals("application/json", StringComparison.OrdinalIgnoreCase)
+               || mediaType.EndsWith("+json", StringComparison.OrdinalIgnoreCase);
     }
 
     public static bool IsChunked(IDictionary<string, string> headers)

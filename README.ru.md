@@ -13,24 +13,27 @@ HTTP-фреймворк, написанный с нуля на C# под .NET 10
 - Текучий построитель приложения
 - Внедрение зависимостей с временами жизни singleton, scoped и transient
 - Проверка времён жизни на старте: scoped внутри singleton роняет сборку приложения
-- Маршрутизация по атрибутам с шаблонами вида `/users/{id}`
-- Глобальные middleware и фильтры на контроллер
+- Явное дерево маршрутов: группы, вложенные группы и шаблоны вида `/users/{id}`
+- Контроллеры — обычные классы, реализующие `IGetHandler`, `IPostHandler`, `IPutHandler`,
+  `IPatchHandler`, `IDeleteHandler`
+- Глобальные middleware, фильтры на группах маршрутов и на отдельных эндпоинтах
+- Автоматические `404` на неизвестный путь и `405` на известный путь с другим методом
+- Чтение значений пути, query, заголовков и JSON-тела из `HttpContext`
 - Конфигурация из значений по умолчанию, JSON и переменных окружения
 - Keep-alive соединения, включая пайплайнинг запросов
 - Чтение запроса с телом фиксированной длины и chunked
-- Настраиваемые лимиты запроса с ответами `413`, `408` и `400`
+- Настраиваемые лимиты запроса с ответами `413`, `408` и `400`; битое JSON-тело — один из них
 - Контроль приёма: ограниченная очередь и `503` при её заполнении
-- Статические файлы
 
 **В работе**
 
-- Привязка параметров пути — роутер достаёт `{id}`, но `[FromRoute]` до метода его пока не доносит
-- Один обработчик на HTTP-глагол в контроллере — `[Route]` по-прежнему на классе
-- Тело запроса и ответа как поток — сейчас тело разбирается как JSON
-- Привязка query для типов, кроме чисел
-- Статика: кэширование, `ETag`, `304`, `HEAD`
-- Модель конкурентности: рабочий владеет соединением всю его жизнь, поэтому число
-  одновременных клиентов ограничено суммой `MaxConcurrentRequests + MaxQueuedConnections`
+- Статические файлы — обработчик переписывается под middleware и сейчас не подключён
+- Тело запроса и ответа как поток — сейчас JSON-тело разбирается заранее
+- `HEAD`, `OPTIONS` и заголовок `Allow` у `405`
+- Модель конкурентности: рабочий владеет соединением всю его жизнь. При keep-alive активный
+  клиент удерживает своего рабочего, и соединения в очереди могут ждать, пока он не уйдёт (см.
+  [нагрузочные тесты](TinyNet.K6Bench/README.ru.md)). Решение — читать запросы на стороне
+  приёма и отдавать рабочим запросы, а не соединения
 
 ---
 
@@ -45,29 +48,33 @@ builder.AddEnvironmentVariables("TINYNET_");
 builder.Services.AddSingleton<MyService>();
 builder.RegisterMiddleware<LoggingMiddleware>();
 
+builder.Routes
+    .AddGroup("/hello")
+    .AddGetHandler<HelloController>();
+
 var app = builder.Build();
 await app.Run();
 ```
 
 ```csharp
-[Route("/hello")]
-public class HelloController : Controller
+public class HelloController : IGetHandler
 {
     private readonly MyService _service;
 
     public HelloController(MyService service) => _service = service;
 
-    [HttpMethod("GET")]
-    public IActionResult Get() => new Ok(new { message = "Hello, World!" });
+    public Task<IActionResult> Get(HttpContext context)
+        => Task.FromResult<IActionResult>(new Ok(new { message = "Hello, World!" }));
 }
 ```
 
 ```json
 {
-  "Server": { "Port": 5000 },
-  "WebRoot": { "Path": "./WebRoot" }
+  "Server": { "Port": 5000 }
 }
 ```
+
+Полное приложение на всех возможностях — в [`TinyNet.Example`](TinyNet.Example/README.ru.md).
 
 ---
 
@@ -76,7 +83,7 @@ public class HelloController : Controller
 | Проект | Назначение |
 |---|---|
 | `TinyNet` | Фреймворк |
-| [`TinyNet.TestApp`](TinyNet.TestApp/README.ru.md) | Пример приложения |
+| [`TinyNet.Example`](TinyNet.Example/README.ru.md) | Пример приложения на всех возможностях фреймворка |
 | [`TinyNet.Tests`](TinyNet.Tests/README.ru.md) | Тесты |
 | [`TinyNet.K6Bench`](TinyNet.K6Bench/README.ru.md) | Симуляторы нагрузки и сценарии k6 |
 
@@ -88,6 +95,7 @@ public class HelloController : Controller
 AppBuilder
     ├── DIContainer
     ├── ConfigurationBuilder
+    ├── Routes (GroupRoute)
     └── MiddlewarePipeline
             │
             ▼
@@ -101,8 +109,12 @@ AppBuilder
             └── пул рабочих          — N = Server:MaxConcurrentRequests
                     │
                     ▼
-            MiddlewarePipeline → ControllerHandler → IActionResult
+            глобальные middleware → роутер → фильтры групп и эндпоинта → контроллер → IActionResult
 ```
+
+`AppBuilder.Build()` делает всю работу заранее: обходит дерево маршрутов, регистрирует
+контроллеры и фильтры в DI, строит роутер, проверяет времена жизни и собирает все цепочки
+фильтров. Ошибка в любом из этих мест роняет сборку, а не первый запрос.
 
 Путь запроса:
 
@@ -111,12 +123,15 @@ AppBuilder
 2. Рабочий забирает соединение и держит его до конца, открывая свежий `DIScope` на каждый
    запрос в нём.
 3. Запрос читается под `HttpLimits`, которые дают `413`, `408` или `400` при превышении
-   лимита. Байты, прочитанные за границей запроса, остаются в буфере для следующего.
-4. Отрабатывает цепочка middleware, затем `ControllerHandler` достаёт контроллер, привязывает
-   параметры и вызывает метод.
-5. `IActionResult.ExecuteResult` заполняет `HttpResponse`, который пишется в сокет.
+   лимита или битом запросе — в том числе когда тело с `application/json` не является
+   JSON-объектом. Байты, прочитанные за границей запроса, остаются в буфере для следующего.
+4. Отрабатывают глобальные middleware, затем роутер ищет эндпоинт по пути и методу: `404`,
+   если путь неизвестен, `405`, если путь есть, а метода на нём нет.
+5. Фильтры групп эндпоинта выполняются от внешней к внутренней, затем фильтры самого
+   эндпоинта, затем контроллер. Его `IActionResult` заполняет `HttpResponse`, который пишется
+   в сокет.
 6. Соединение переиспользуется, пока клиент не попросит закрыть, пока не исчерпается
-   `Server:KeepAliveMax` или пока оно не простоит `Server:KeepAliveTimeout`.
+   `Server:KeepAliveMax` или пока оно не простоит `Server:KeepAliveTimeout` между запросами.
 
 Поскольку рабочий владеет соединением, а не запросом, `Server:MaxConcurrentRequests` на
 практике задаёт число одновременных **клиентов**. Соединения сверх него ждут в очереди и не
@@ -134,10 +149,21 @@ builder.Services.AddSingleton<MyService>();
 builder.Services.AddInstance<IMyService>(existingInstance);
 ```
 
-Контроллеры и middleware получают зависимости через конструктор; выбирается конструктор с
-наибольшим числом параметров. Циклические зависимости бросают `InvalidOperationException`
-при разрешении. Конструкторы компилируются в делегаты при первом обращении и кэшируются,
-поэтому разрешение не идёт через рефлексию.
+Зависимости приходят через конструктор; выбирается конструктор с наибольшим числом
+параметров. Конструкторы компилируются в делегаты при первом обращении и кэшируются.
+Циклические зависимости бросают `InvalidOperationException` при разрешении.
+
+Времена жизни частей фреймворка задаёт сам фреймворк, а не пользователь:
+
+| Часть | Время жизни | Кто регистрирует |
+|---|---|---|
+| Контроллер | transient, один на запрос | фреймворк, из маршрутов |
+| Фильтр | singleton | фреймворк, из `AddFilter<T>()` |
+| Middleware | singleton | `RegisterMiddleware<T>()` |
+
+Middleware и фильтры общие для параллельных запросов, поэтому должны быть потокобезопасными и
+брать в конструктор только синглтоны. Сервисы запроса берутся внутри `InvokeAsync` через
+`context.GetService<T>()`.
 
 `AppBuilder.Build()` проверяет времена жизни до старта сервера. Синглтон, зависящий от
 scoped-сервиса напрямую или через transient, захватил бы его на всё время жизни процесса,
@@ -152,60 +178,114 @@ Captive dependency: Reports (Singleton) -> ReportBuilder (Transient) -> DbSessio
 
 ---
 
-## Контроллеры и маршрутизация
+## Маршруты и контроллеры
 
-Контроллер наследуется от `Controller`, помечается `[Route]` и содержит методы с
-`[HttpMethod]`. Контроллер обрабатывает по одному методу на HTTP-глагол.
-
-Маршрут — это шаблон: `/users/{id}` сопоставляется с `/users/42`. Сопоставление идёт по
-сегментам, точный сегмент предпочитается параметру, а тупиковая точная ветка откатывается,
-поэтому `/users/me` выигрывает у `/users/{id}`, но `/a/b/c` всё равно попадает в
-`/a/{id}/c`. Регистр сегментов не учитывается, хвостовой слэш игнорируется, а каждый сегмент
-декодируется из `%XX` уже после разбиения — так `%2F` не подсунет разделитель. Шаблоны
-проверяются при старте приложения: повторный маршрут, смешанный сегмент вида `v{id}` и два
-разных имени параметра на одной позиции бросают именно там, а не на запросе. Значения
-параметров пути до параметров метода пока не доходят.
+Маршруты объявляются в одном месте — в дереве `builder.Routes`. Другого способа объявить
+маршрут нет. Путь строится только из групп; обработчик вешается на конец своей группы и
+возвращает её же, поэтому вызовы идут цепочкой:
 
 ```csharp
-[Route("/products")]
-public class ProductsController : Controller
+var users = builder.Routes
+    .AddGroup("/users")
+    .AddFilter<AuthFilter>()
+    .AddGetHandler<UsersController>()
+    .AddPostHandler<UsersController>(endpoint => endpoint.AddFilter<AdminFilter>());
+
+users.AddGroup("{id}")
+    .AddGetHandler<UserController>()
+    .AddDeleteHandler<UserController>(endpoint => endpoint.AddFilter<AdminFilter>());
+```
+
+Контроллер — любой класс, реализующий интерфейсы обработчиков. `AddGetHandler<C>()` требует
+`C : IGetHandler`, так что связь маршрута и метода проверяет компилятор:
+
+```csharp
+public class UserController : IGetHandler, IDeleteHandler
 {
-    [HttpMethod("GET")]
-    public IActionResult GetAll() => new Ok(new[] { "first", "second" });
-
-    [HttpMethod("POST")]
-    public IActionResult Create([FromBody] string name) => new Ok(new { created = name });
-
-    [HttpMethod("PUT")]
-    public IActionResult Resize([FromQuery] int width) => new Ok(new { width });
+    public Task<IActionResult> Get(HttpContext context) { ... }
+    public Task<IActionResult> Delete(HttpContext context) { ... }
 }
 ```
 
-`[FromBody]` берёт свойство JSON-тела с именем параметра. `[FromQuery]` берёт значение из
-строки запроса. Принимаются `GET`, `POST`, `PUT`, `DELETE`, `PATCH`, `HEAD` и `OPTIONS`.
-`[NotMapped]` исключает контроллер из маршрутизации.
+- Фильтр группы действует на все эндпоинты внутри неё, включая вложенные группы. Фильтры
+  выполняются от внешней группы к внутренней, затем фильтры самого эндпоинта; внутри уровня —
+  в порядке добавления. Фильтр, добавленный в группу после её обработчиков, тоже действует.
+- Группу можно собрать отдельно и подключить через `AddGroup(group)`; у группы один родитель.
+- Сопоставление идёт по сегментам. Точный сегмент предпочитается параметру, тупиковая ветка
+  откатывается, поэтому `/users/me` выигрывает у `/users/{id}`, а `POST /users/me` всё равно
+  дойдёт до `POST /users/{id}`, если на `/users/me` есть только `GET`. Регистр сегментов не
+  учитывается, хвостовой слэш игнорируется, а каждый сегмент декодируется из `%XX` уже после
+  разбиения — так `%2F` не подсунет разделитель.
+- `Build()` падает на повторе метода и пути, фильтре, навешанном дважды на пути к эндпоинту,
+  двух разных именах параметра на одной позиции, смешанном сегменте вида `v{id}` и группе,
+  подключённой ко второму родителю. Второй обработчик того же метода на одной группе падает
+  сразу при вызове.
+
+---
+
+## Чтение данных запроса
+
+Контроллер читает всё из `HttpContext`. Ничего не привязывается к параметрам метода и ничего
+не бросает исключений: `null` значит, что значения нет или оно не разбирается, а как ответить,
+решает контроллер:
+
+```csharp
+var id = context.GetFromRoute<int>("id");            // int?
+if (id is null)
+    return new BadRequest("id must be a number");
+
+var take = context.GetFromQuery<int>("take") ?? 10;  // int?
+var key = context.GetFromHeader("X-Api-Key");        // string?
+
+var input = await context.ReadFromBodyAsync<NoteInput>();   // NoteInput?
+if (input is null)
+    return new BadRequest("Body must be a note");
+
+var service = context.GetService<MyScopedService>();
+```
+
+- `GetFromRoute`, `GetFromQuery` и `GetFromHeader` без аргумента типа возвращают `string?`,
+  а с ним — `T?` для любого значимого типа с `IParsable<T>`. Значения разбираются в
+  инвариантной культуре.
+- `GetFromQuery<int>("take") ?? 10` считает `?take=many` отсутствующим значением. Если мусор
+  нужно отличить от отсутствия, проверьте `context.Request.Query.ContainsKey("take")`.
+- Тело разбирается как JSON, только если `Content-Type` равен `application/json` или
+  заканчивается на `+json`. Битое тело или тело, не являющееся JSON-объектом, получает `400`
+  ещё при чтении запроса, до всех middleware. Любое другое тело не разбирается, и
+  `ReadFromBodyAsync` возвращает `null`.
+- Имена свойств JSON нечувствительны к регистру — и при чтении тела, и в ответах.
+- Сырые словари `context.Request.Route`, `.Query` и `.Headers` остаются доступными.
 
 ---
 
 ## Middleware и фильтры
 
-```csharp
-public class LoggingMiddleware : Middleware
-{
-    public LoggingMiddleware(RequestDelegate next) : base(next) { }
+Middleware и фильтры реализуют один и тот же интерфейс:
 
-    public override async Task InvokeAsync(HttpContext context)
+```csharp
+public class LoggingMiddleware : IMiddleware
+{
+    public async Task InvokeAsync(HttpContext context, RequestDelegate next)
     {
         Console.WriteLine($"→ {context.Request.Method} {context.Request.Url}");
-        await _next(context);
+        await next(context);
     }
 }
 ```
 
-`RegisterMiddleware<T>()` выполняет middleware для каждого запроса. `RegisterFilter<T>()` —
-только для контроллеров, помеченных `[Filter(typeof(T))]`. Сначала идут глобальные
-middleware, затем фильтры найденного контроллера, каждая группа в порядке регистрации.
-Middleware, не вызывающая `_next`, обрывает цепочку.
+`RegisterMiddleware<T>()` выполняет его на каждый запрос, до роутинга, в порядке регистрации.
+`AddFilter<T>()` на группе или эндпоинте выполняет его только для этой части дерева
+маршрутов. Код после `await next(context)` выполняется, когда ответ уже заполнен. Middleware
+или фильтр, не вызвавшие `next`, обрывают запрос — сначала заполните `context.Response`
+результатом:
+
+```csharp
+new BaseResult(401, "Missing X-Api-Key").ExecuteResult(context);
+return Task.CompletedTask;
+```
+
+`400`, `408` и `413`, возникшие при чтении запроса, случаются до конвейера, поэтому middleware
+этих ответов не видят.
 
 ---
 
@@ -227,7 +307,7 @@ builder.AddEnvironmentVariables("TINYNET_");
 
 ```csharp
 var port = configuration.GetValue<int>("Server:Port");
-var path = configuration["WebRoot:Path"];
+var key = configuration["Example:ApiKey"];
 ```
 
 ### Ключи фреймворка
@@ -243,11 +323,13 @@ var path = configuration["WebRoot:Path"];
 | `Server:ReadTimeoutSeconds` | `15` | время на полный запрос ⇒ `408` |
 | `Server:KeepAliveMax` | `1000` | сколько запросов обслуживается на одном соединении |
 | `Server:KeepAliveTimeout` | `5` | сколько секунд соединение может простаивать между запросами |
-| `WebRoot:Path` | `./WebRoot` | корень статики, относительный или абсолютный |
+| `WebRoot:Path` | `./WebRoot` | корень статики; не используется, пока статика не подключена |
 
-`KeepAliveTimeout` намеренно короткий: простаивающее соединение держит рабочего. За обратным
-прокси с пулом апстрим-соединений его нужно поднимать **выше** таймаута простоя у прокси —
-иначе сервер закроет соединение из пула, а клиент получит `502`.
+`KeepAliveTimeout` ограничивает паузу **между** запросами, а не жизнь соединения: клиент,
+который шлёт запросы без пауз, держит своего рабочего до `KeepAliveMax` запросов. Таймаут
+намеренно короткий: простаивающее соединение держит рабочего. За обратным прокси с пулом
+апстрим-соединений его нужно поднимать **выше** таймаута простоя у прокси — иначе сервер
+закроет соединение из пула, а клиент получит `502`.
 
 ---
 
@@ -261,33 +343,24 @@ var path = configuration["WebRoot:Path"];
 | `InternalError` | 500 | необязательный JSON |
 | `HtmlView` | 200 | HTML |
 | `Media` | 200 | текст или байты с явным content type |
+| `BaseResult` | любой | необязательный JSON |
 
 ```csharp
 return new Ok(new { id = 1 });
+return new BaseResult(201, created);
 return new HtmlView("<h1>Hello</h1>");
 return new Media(bytes, "image/png");
 ```
 
 Новый результат наследуется от `BaseResult` для JSON-тела либо от `ActionResult`, чтобы
-заполнить ответ самому:
-
-```csharp
-public class Created : BaseResult
-{
-    public Created(object data) : base(201, data) { }
-}
-```
+заполнить ответ самому.
 
 ---
 
 ## Статические файлы
 
-URL, содержащий `.`, отдаётся из корня статики, который разрешается относительно рабочего
-каталога. Пути, ведущие за пределы корня, отклоняются с `404`, как и отсутствующий файл.
-
-`html`, `css`, `js`, `json`, `xml`, `jpeg`, `jpg`, `png`, `bmp`, `gif`, `tiff`, `tif`,
-`webp`, `zip` и `rar` отдаются со своим content type, остальное — как
-`application/octet-stream`.
+Сейчас не отдаются: обработчик статики переписывается под middleware. Его проверка пути
+сохранена и покрыта тестами — путь за пределы корня статики отклоняется.
 
 ---
 

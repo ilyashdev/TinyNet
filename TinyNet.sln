@@ -2,7 +2,7 @@
 Microsoft Visual Studio Solution File, Format Version 12.00
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TinyNet", "TinyNet\TinyNet.csproj", "{DB80A4F4-6999-4FAF-A079-4A32B80643C8}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TinyNet.TestApp", "TinyNet.TestApp\TinyNet.TestApp.csproj", "{0E932C4D-7C44-40DE-B133-C28C41672A6C}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TinyNet.Example", "TinyNet.Example\TinyNet.Example.csproj", "{0E932C4D-7C44-40DE-B133-C28C41672A6C}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TinyNet.Tests", "TinyNet.Tests\TinyNet.Tests.csproj", "{6DED5F22-7DF4-43D3-A466-4F61A10FB8C5}"
 EndProject

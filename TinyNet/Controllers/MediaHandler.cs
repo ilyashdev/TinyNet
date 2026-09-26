@@ -3,10 +3,11 @@ using System.Text;
 using TinyNet.ActionResult;
 using TinyNet.ActionResult.Results;
 using TinyNet.Configurations;
+using TinyNet.Http;
 
 namespace TinyNet.Controllers;
-[NotMapped]
-public class MediaHandler : Controller
+
+public class MediaHandler
 {
     internal static Dictionary<string,string> StaticContent = new()
     {
@@ -36,10 +37,9 @@ public class MediaHandler : Controller
         _webRoot = Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), configured));
     }
 
-    [HttpMethod("GET")]
-    public async Task<IActionResult> Get()
+    public async Task<IActionResult> Get(HttpContext context)
     {
-        if (!TryResolvePath(_context.Request.Url, out var path) || !File.Exists(path))
+        if (!TryResolvePath(context.Request.Url, out var path) || !File.Exists(path))
             return new NotFound();
         string extension = Path.GetExtension(path).TrimStart('.').ToLower();
         if (!StaticContent.TryGetValue(extension, out string contentType))

@@ -1,4 +1,3 @@
-﻿using System.Reflection;
 using TinyNet.DI;
 using TinyNet.Http;
 
@@ -7,53 +6,49 @@ namespace TinyNet.Middlewares;
 public class MiddlewarePipeline
 {
     private readonly DIContainer _container;
-    private ICollection<Type> _filterMiddlewares = new List<Type>();
-    private ICollection<Type> _allMiddlewares = new List<Type>();
+    private readonly List<Type> _middlewares = new();
+
+    private bool _built = false;
+
+    private RequestDelegate? _middlewareChains;
 
     public MiddlewarePipeline(DIContainer container)
     {
         _container = container;
     }
 
-    public void RegisterMiddleware<T>() where T : Middleware
+    public void RegisterMiddleware<T>() where T : IMiddleware
     {
-        _container.AddTransient<T>();
-        _allMiddlewares.Add(typeof(T));
+        EnsureNotBuilt();
+        _container.AddSingleton<T>();
+        _middlewares.Add(typeof(T));
     }
 
-    public void RegisterFilter<T>() where T : Middleware
+    public void Build(RequestDelegate final)
     {
-        _container.AddTransient<T>();
-        _filterMiddlewares.Add(typeof(T));
+        EnsureNotBuilt();
+        _built = true;
+        _middlewareChains = Compose(_middlewares.Select(t => (IMiddleware)_container.GetSingleton(t)).ToList(), final);
     }
 
-    private List<IMiddleware> CreatePipeline(IEnumerable<FilterAttribute> filters, DIScope scope, RequestDelegate final)
+    public Task InvokeAsync(HttpContext context)
+        => (_middlewareChains ?? throw new InvalidOperationException("Pipeline is not built"))(context);
+
+    internal static RequestDelegate Compose(IReadOnlyList<IMiddleware> middlewares, RequestDelegate final)
     {
-        var pipeline = new List<IMiddleware>();
-        var pipelineMiddlewares = new List<Type>();
-        pipelineMiddlewares.AddRange(_allMiddlewares);
-        pipelineMiddlewares.AddRange(_filterMiddlewares.Where(c => filters.Any(f => f.FilterType == c)));
-        pipelineMiddlewares.Reverse();
-        RequestDelegate temp = final;
-        foreach (var middleware in pipelineMiddlewares)
+        var next = final;
+        for (var i = middlewares.Count - 1; i >= 0; i--)
         {
-            var middlewareInstance = _container.GetMiddleware(middleware, temp, scope);
-            pipeline.Add(middlewareInstance);
-            temp = middlewareInstance.InvokeAsync;
+            var middleware = middlewares[i];
+            var inner = next;
+            next = ctx => middleware.InvokeAsync(ctx, inner);
         }
-        return pipeline;
+        return next;
     }
-    
-    public async Task InvokeAsync(HttpContext context, Type controller,DIScope scope, RequestDelegate final)
+
+    private void EnsureNotBuilt()
     {
-        var attributes = controller.GetCustomAttributes<FilterAttribute>();
-        var pipeline = CreatePipeline(attributes,scope, final);
-        if (pipeline.Count == 0)
-        {
-            await final(context);
-            return;
-        }
-        await pipeline.Last().InvokeAsync(context);
+        if (_built)
+            throw new InvalidOperationException("Pipeline already built");
     }
-    
 }

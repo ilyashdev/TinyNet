@@ -1,4 +1,4 @@
-﻿using System.Text;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -11,12 +11,13 @@ public class HttpRequest
     public string Protocol {get; set;} = "HTTP/1.1";
     public Dictionary<string, string> Headers {get; set;}
     public Dictionary<string, string> Query {get; set;}
-    public JsonObject Body {get; set;}
+    public JsonObject? Body {get; set;}
+    public Dictionary<string, string> Route {get; set;} = new();
     public HttpRequest(string method,
         string url,
         Dictionary<string, string> headers,
         Dictionary<string, string> query,
-        JsonObject body)
+        JsonObject? body)
     {
         Method = method;
         Url = url;

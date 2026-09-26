@@ -9,11 +9,11 @@ Measurements against the simulator endpoints in `LoadControllers.cs`.
 ## Running
 
 Start the server from the `TinyNet.K6Bench` directory — the working directory matters,
-since `config.json` and `WebRoot` are resolved relative to it:
+since `config.json` is resolved relative to it. Build in Release for measurements:
 
 ```bash
 cd TinyNet.K6Bench
-dotnet run
+dotnet run -c Release
 ```
 
 Run the scenarios from the `loadtests` directory:
@@ -60,11 +60,12 @@ k6 run -e N=64 -e QUEUE=64 -e MS=1000 knee-io.js
 
 | Path | What is occupied during handling | Purpose |
 |---|---|---|
+| `/` | nothing, answers `"ok"` | `baseline.js` and `errors.js` |
 | `/load/cpu?ms=N` | a core; the pool thread does real work | CPU saturation |
 | `/load/io?ms=N` | nothing (`Task.Delay`) | the normal shape of a web handler |
 | `/load/block?ms=N` | a pool thread, idling (`Thread.Sleep`) | cost of sync code in an async handler |
 
-`ms` is required — without it the binder answers 400.
+`ms` is required — without it, or with a non-numeric value, the handler answers 400.
 
 ## What to know before the first run
 
@@ -120,7 +121,38 @@ architectural conclusions from `io` and `block`.
 
 ## Results
 
-16 logical cores, measured 2026-09-17 and 2026-09-18.
+16 logical cores, measured 2026-09-17, 2026-09-18 and 2026-09-26.
+
+### 2026-09-26: after the switch to explicit routes
+
+Release build. The goal is to confirm that the new routing, filters and data reading did not
+cost anything.
+
+| Scenario | 2026-09-18 | 2026-09-26 |
+|---|---|---|
+| `saturation.js`, 60 000 rps | 59 673 rps, p(95) 2.06 ms | 59 514 rps, p(95) 3.12 ms |
+| `saturation.js`, 110 000 rps | 91 356 rps, p(95) 13.24 ms | **104 467 rps**, p(95) 7.65 ms |
+| `baseline.js`, up to 500 rps | — | 9 999 requests, 0 errors |
+| `errors.js`, `MODE=oversize` | — | 6 001 × `413`, no dropped connections |
+
+The ceiling went up, but the comparison is not clean: the build profile of 2026-09-18 was not
+recorded.
+
+**Keep-alive breaks the capacity formula.** `knee-io.js`, N = 64, queue = 64, handler
+1000 ms, predicted worst latency 2 s:
+
+| | `200` | `503` | max |
+|---|---|---|---|
+| 2026-09-17, before keep-alive | 2 395 | 6 | 2.02 s |
+| 2026-09-26, `KeepAliveMax=1` | 2 396 | 6 | 2.02 s |
+| 2026-09-26, keep-alive `1000/5` | 2 330 | 71 | **53.57 s** |
+
+Without keep-alive the result matches 2026-09-17 almost to the request — no regression. With
+keep-alive a client that got a worker sends without pauses, so `KeepAliveTimeout` (the pause
+*between* requests) never fires and the connection holds its worker for up to `KeepAliveMax`
+requests. Queued connections wait until the test ends — 53 s is the length of the run, not a
+bound. p(95) stays at 1.01 s: only the queued clients suffer. The fix is to read requests on
+the accepting side, so that workers take requests rather than connections.
 
 ### The ceiling is ~90k rps, and it is not where refusals start
 
