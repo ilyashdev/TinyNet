@@ -33,7 +33,8 @@ public class WebApplication
 
     public async Task Run(CancellationToken ct = default)
     {
-        Console.WriteLine($"Application started on http://localhost:{_handler.Port}");
+        var port = _configuration.GetValue<int>(FrameworkDefaults.ServerPort);
+        Console.WriteLine($"Application started on http://localhost:{port}");
         var channel = Channel.CreateBounded<NetClient>(
             new BoundedChannelOptions(_configuration.GetValue<int>(FrameworkDefaults.ServerMaxQueuedConnections))
             {
@@ -44,10 +45,21 @@ public class WebApplication
             .Range(0, _configuration.GetValue<int>(FrameworkDefaults.ServerMaxConcurrentRequests))
             .Select(_ => Worker(channel, ct))
             .ToArray();
-
-        await RunAcceptThread(channel, ct);
-        channel.Writer.Complete();
-        await Task.WhenAll(workers);
+        try
+        {
+            await RunAcceptThread(channel, ct);
+            channel.Writer.Complete();
+            await Task.WhenAll(workers);
+        }
+        catch (Exception e)
+        {
+            Console.WriteLine(e);
+        }
+        finally
+        {
+            await _container.DisposeAsync();
+            Console.WriteLine($"Application stopped on http://localhost:{port}");
+        }
     }
     
     private Task RunAcceptThread(Channel<NetClient> channel, CancellationToken ct)
@@ -125,17 +137,15 @@ public class WebApplication
         {
             for (int remaining = keepAliveMax; remaining > 0; remaining--)
             {
-                using (DIScope scope = _container.CreateScope())
-                {
-                    var idleTimeout = remaining == keepAliveMax ? (TimeSpan?)null : keepAliveTimeout;
-                    var response = await BuildResponse(client, scope, idleTimeout, remaining > 1, ct);
-                    if (response is null)
-                        return;
+                await using DIScope scope = _container.CreateScope();
+                var idleTimeout = remaining == keepAliveMax ? (TimeSpan?)null : keepAliveTimeout;
+                var response = await BuildResponse(client, scope, idleTimeout, remaining > 1, ct);
+                if (response is null)
+                    return;
 
-                    await SendSafely(client, response);
-                    if (!IsKeepAlive(response))
-                        return;
-                }
+                await SendSafely(client, response);
+                if (!IsKeepAlive(response))
+                    return;
             }
         }
     }

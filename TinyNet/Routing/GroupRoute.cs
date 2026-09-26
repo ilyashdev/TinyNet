@@ -11,6 +11,7 @@ public sealed class GroupRoute
     private readonly List<EndpointRoute> _endpoints = new();
     private readonly List<GroupRoute> _groups = new();
     private GroupRoute? _parent;
+    private bool _frozen;
 
     public GroupRoute(string basePath)
     {
@@ -22,8 +23,11 @@ public sealed class GroupRoute
     internal IReadOnlyList<EndpointRoute> Endpoints => _endpoints;
     internal IReadOnlyList<GroupRoute> Groups => _groups;
 
+    internal void Freeze() => _frozen = true;
+
     public GroupRoute AddFilter<T>() where T : IMiddleware
     {
+        EnsureNotFrozen();
         _filters.Add(typeof(T));
         return this;
     }
@@ -33,6 +37,7 @@ public sealed class GroupRoute
 
     public GroupRoute AddGroup(GroupRoute group)
     {
+        EnsureNotFrozen();
         if (group._parent is not null)
             throw new InvalidOperationException($"Group {group.BasePath} already belongs to group {group._parent.BasePath}");
         for (var ancestor = this; ancestor is not null; ancestor = ancestor._parent)
@@ -61,6 +66,7 @@ public sealed class GroupRoute
     private GroupRoute AddEndpoint<T>(
         string method, Func<T, HttpContext, Task<IActionResult>> action, Action<EndpointRoute>? setup) where T : class
     {
+        EnsureNotFrozen();
         if (_endpoints.Any(e => e.Method == method))
             throw new InvalidOperationException($"Group {BasePath} already has a {method} handler");
         var endpoint = new EndpointRoute(method, typeof(T), async context =>
@@ -72,5 +78,11 @@ public sealed class GroupRoute
         setup?.Invoke(endpoint);
         _endpoints.Add(endpoint);
         return this;
+    }
+
+    private void EnsureNotFrozen()
+    {
+        if (_frozen)
+            throw new InvalidOperationException($"Group {BasePath} cannot be changed after Build()");
     }
 }

@@ -18,10 +18,14 @@ internal static class RouteCompiler
 
     private static void Walk(GroupRoute group, string prefix, List<Type> inherited, List<Endpoint> endpoints)
     {
+        group.Freeze();
         var path = Join(prefix, group.BasePath);
         var filters = inherited.Concat(group.Filters).ToList();
         foreach (var route in group.Endpoints)
+        {
+            route.Freeze();
             endpoints.Add(new Endpoint(route, path, filters.Concat(route.Filters).ToList()));
+        }
         foreach (var child in group.Groups)
             Walk(child, path, filters, endpoints);
     }

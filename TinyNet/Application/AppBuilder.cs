@@ -14,6 +14,7 @@ public class AppBuilder
     private NetHandler _netHandler;
     private ConfigurationBuilder _configBuilder { get; init; }
     private MiddlewarePipeline _pipeline { get; init; }
+    private bool _isBuilt = false;
 
     public AppBuilder()
     {
@@ -25,6 +26,7 @@ public class AppBuilder
 
     public AppBuilder AddDefault(string key, string value)
     {
+        
         _configBuilder.AddDefault(key, value);
         return this;
     }
@@ -55,6 +57,9 @@ public class AppBuilder
 
     public WebApplication Build()
     {
+        if (_isBuilt)
+            throw new InvalidOperationException("App is already built.");
+        _isBuilt = true;
         var conf =
             _configBuilder
 
@@ -64,6 +69,7 @@ public class AppBuilder
         _netHandler = new(conf.GetValue<int>(FrameworkDefaults.ServerPort), ReadHttpLimits(conf));
         var endpoints = RouteCompiler.Compile(Routes, Services);
         var router = new UrlRouter(endpoints);
+        Services.Freeze();
         Services.Validate();
         foreach (var endpoint in endpoints)
             endpoint.Link(Services);
