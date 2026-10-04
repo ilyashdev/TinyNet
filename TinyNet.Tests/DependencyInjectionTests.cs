@@ -42,6 +42,15 @@ public class DependencyInjectionTests
         public void Dispose() => _log.Entries.Add(nameof(Connection));
     }
 
+    public class Pool : IDisposable
+    {
+        private readonly DisposeLog _log;
+
+        public Pool(DisposeLog log) => _log = log;
+
+        public void Dispose() => _log.Entries.Add(nameof(Pool));
+    }
+
     public class Session : IAsyncDisposable
     {
         private readonly DisposeLog _log;
@@ -116,11 +125,12 @@ public class DependencyInjectionTests
     }
 
     [Fact]
-    public async Task ContainerDispose_DisposesEachSingletonOnce()
+    public async Task ContainerDispose_DisposesEachSingletonOnceAndInstancesLast()
     {
         var log = new DisposeLog();
         var container = new DIContainer();
         container.AddInstance(log);
+        container.AddInstance(new Pool(log));
         container.AddSingleton<Connection>();
         container.Freeze();
 
@@ -132,6 +142,6 @@ public class DependencyInjectionTests
         await container.DisposeAsync();
         await container.DisposeAsync();
 
-        Assert.Equal([nameof(Connection)], log.Entries);
+        Assert.Equal([nameof(Connection), nameof(Pool)], log.Entries);
     }
 }

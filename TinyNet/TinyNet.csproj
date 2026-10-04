@@ -10,4 +10,8 @@
         <InternalsVisibleTo Include="TinyNet.Tests"/>
     </ItemGroup>
 
+    <ItemGroup>
+      <Folder Include="Protocols\Http1\" />
+    </ItemGroup>
+
 </Project>

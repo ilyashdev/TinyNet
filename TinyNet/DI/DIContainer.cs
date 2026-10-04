@@ -69,6 +69,8 @@ public class DIContainer : IAsyncDisposable
     public void AddInstance<TService>(TService instance)
     {
         AddSingleton<TService>();
+        if (instance is IDisposable || instance is IAsyncDisposable)
+            _singletonDisposables.Push(instance);
         _singletonInstances.TryAdd(typeof(TService), new Lazy<object>(instance!));
     }
 

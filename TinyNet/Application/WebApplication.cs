@@ -35,21 +35,9 @@ public class WebApplication
     {
         var port = _configuration.GetValue<int>(FrameworkDefaults.ServerPort);
         Console.WriteLine($"Application started on http://localhost:{port}");
-        var channel = Channel.CreateBounded<NetClient>(
-            new BoundedChannelOptions(_configuration.GetValue<int>(FrameworkDefaults.ServerMaxQueuedConnections))
-            {
-                FullMode = BoundedChannelFullMode.Wait,
-                SingleWriter = true
-            });
-        var workers = Enumerable
-            .Range(0, _configuration.GetValue<int>(FrameworkDefaults.ServerMaxConcurrentRequests))
-            .Select(_ => Worker(channel, ct))
-            .ToArray();
         try
         {
-            await RunAcceptThread(channel, ct);
-            channel.Writer.Complete();
-            await Task.WhenAll(workers);
+            await RunAcceptThread(ct);
         }
         catch (Exception e)
         {
@@ -62,14 +50,14 @@ public class WebApplication
         }
     }
     
-    private Task RunAcceptThread(Channel<NetClient> channel, CancellationToken ct)
+    private Task RunAcceptThread(CancellationToken ct)
     {
         var finished = new TaskCompletionSource();
         var thread = new Thread(() =>
         {
             try
             {
-                AcceptLoop(channel, ct);
+                AcceptLoop(ct);
             }
             finally
             {
@@ -84,22 +72,7 @@ public class WebApplication
         return finished.Task;
     }
 
-    private async Task Worker(Channel<NetClient> channel, CancellationToken ct)
-    {
-        await foreach (var client in channel.Reader.ReadAllAsync())
-        {
-            try
-            {
-                await ProcessClient(client, ct);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Worker error: {ex}");
-            }
-        }
-    }
-
-    private void AcceptLoop(Channel<NetClient> channel, CancellationToken ct)
+    private void AcceptLoop(CancellationToken ct)
     {
         using var stopping = ct.Register(_handler.StopListening);
         while (!ct.IsCancellationRequested)
@@ -108,11 +81,6 @@ public class WebApplication
             try
             {
                 client = _handler.Accept();
-                if (!channel.Writer.TryWrite(client))
-                {
-                    client.SendOverloadedResponse();
-                    client.Dispose();
-                }
             }
             catch (Exception ex) when (ex is ObjectDisposedException or SocketException)
             {
