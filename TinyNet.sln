@@ -1,4 +1,4 @@
-﻿
+
 Microsoft Visual Studio Solution File, Format Version 12.00
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TinyNet", "TinyNet\TinyNet.csproj", "{DB80A4F4-6999-4FAF-A079-4A32B80643C8}"
 EndProject
@@ -7,6 +7,15 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TinyNet.Tests", "TinyNet.Tests\TinyNet.Tests.csproj", "{6DED5F22-7DF4-43D3-A466-4F61A10FB8C5}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TinyNet.K6Bench", "TinyNet.K6Bench\TinyNet.K6Bench.csproj", "{2481C59C-74D9-4736-8973-D8CD974B1BD4}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{0C1C5E8B-1F92-49FB-8CBA-3AE9238DF82F}"
+	ProjectSection(SolutionItems) = preProject
+		TODO.md = TODO.md
+		README.md = README.md
+		README.ru.md = README.ru.md
+		LICENSE = LICENSE
+		.gitignore = .gitignore
+	EndProjectSection
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
