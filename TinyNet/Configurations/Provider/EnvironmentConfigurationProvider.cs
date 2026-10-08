@@ -15,16 +15,15 @@ public class EnvironmentConfigurationProvider : IConfigurationProvider
             .Cast<DictionaryEntry>()
             .Where(e => _prefix == null || ((string)e.Key).StartsWith(_prefix))
             .ToDictionary(
-                e =>  ((string)e.Key)                                                                                                                                                                                                                              
-                    .Substring(_prefix?.Length ?? 0)                                                                                                                                                                                                              
-                    .Replace("__", ":"), 
+                e => ((string)e.Key)
+                    .Substring(_prefix?.Length ?? 0)
+                    .Replace("__", ":"),
                 e => (string)e.Value);
     }
-    
-    public bool TryGet(string key, out string value) 
+
+    public bool TryGet(string key, out string value)
         => _data.TryGetValue(key, out value);
 
-    public IEnumerable<string> GetChildKeys() 
+    public IEnumerable<string> GetChildKeys()
         => _data.Keys;
-    
 }

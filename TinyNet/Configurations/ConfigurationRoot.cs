@@ -24,11 +24,11 @@ public class ConfigurationRoot : IConfiguration
                     return value;
                 }
             }
+
             return null;
         }
     }
 
-    public IConfigurationSection GetSection(string key) 
+    public IConfigurationSection GetSection(string key)
         => new ConfigurationSection(this, key);
 }
-

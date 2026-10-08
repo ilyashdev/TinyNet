@@ -1,63 +1,74 @@
-using System.Net;
-using System.Net.Sockets;
 using System.Text;
+using System.Text.RegularExpressions;
 using TinyNet.Application;
 using TinyNet.Http;
+using TinyNet.Routing;
 
 namespace TinyNet.Tests;
 
 public class RequestReadingTests
 {
-    [Theory]
-    [InlineData(1)]
-    [InlineData(3)]
-    [InlineData(4)]
-    [InlineData(8192)]
-    public async Task GetRequest_HeadSplitAcrossReads_IsParsedCorrectly(int receiveBufferSize)
+    [Fact]
+    public async Task PipelinedRequests_OnOneConnection_AreAnsweredInOrder()
     {
-        var limits = new HttpLimits(16384, 8192, receiveBufferSize, TimeSpan.FromSeconds(10));
-        var (client, server) = await CreatePairAsync(limits);
+        await using var server = TestServer.Start(Routes);
 
-        using (client)
-        using (server)
-        {
-            const string body = """{"name":"Bob"}""";
-            var raw = "POST /echo?x=1 HTTP/1.1\r\n" +
-                      "Host: localhost\r\n" +
-                      "Content-Type: application/json\r\n" +
-                      $"Content-Length: {Encoding.UTF8.GetByteCount(body)}\r\n" +
-                      "\r\n" +
-                      body;
+        var response = await server.SendRawAsync(
+            "POST /ignore HTTP/1.1\r\nHost: localhost\r\nContent-Length: 5\r\n\r\nfirst" +
+            "POST /echo HTTP/1.1\r\nHost: localhost\r\nContent-Length: 6\r\n\r\nsecond" +
+            "GET /echo HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
 
-            var reading = server.GetRequest();
-
-            foreach (var octet in Encoding.UTF8.GetBytes(raw))
-                await client.SendAsync(new[] { octet });
-
-            var request = await reading.WaitAsync(TimeSpan.FromSeconds(10));
-
-            Assert.Equal("POST", request.Method);
-            Assert.Equal("/echo", request.Url);
-            Assert.Equal("1", request.Query["x"]);
-            Assert.Equal("localhost", request.Headers["host"]);
-            Assert.Equal("Bob", request.Body!["name"]!.GetValue<string>());
-        }
+        Assert.Equal(["200", "200", "200"], Statuses(response));
+        Assert.EndsWith("\r\n\r\n", response);
+        Assert.Contains("\r\n\r\nignored", response);
+        Assert.Contains("\r\n\r\nsecond", response);
     }
 
-    private static async Task<(Socket Client, NetClient Server)> CreatePairAsync(HttpLimits limits)
+    [Fact]
+    public async Task ChunkedBody_IsReadToTheEnd()
     {
-        using var listener = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-        listener.Bind(new IPEndPoint(IPAddress.Loopback, 0));
-        listener.Listen(1);
+        await using var server = TestServer.Start(Routes);
 
-        var client = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp)
-        {
-            NoDelay = true
-        };
-        var connecting = client.ConnectAsync((IPEndPoint)listener.LocalEndPoint!);
-        var accepted = await listener.AcceptAsync();
-        await connecting;
+        var response = await server.SendRawAsync(
+            "POST /echo HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n" +
+            "5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n");
 
-        return (client, new NetClient(accepted, limits));
+        Assert.StartsWith("HTTP/1.1 200", response);
+        Assert.EndsWith("\r\n\r\nhello world", response);
     }
+
+    [Fact]
+    public async Task ChunkedBodyOverLimit_IsAnswered413()
+    {
+        await using var server = TestServer.Start(Routes,
+            app => app.AddDefault(FrameworkDefaults.ServerMaxBodyBytes, "8"));
+
+        var response = await server.SendRawAsync(
+            "POST /echo HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n\r\n" +
+            "5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n");
+
+        Assert.StartsWith("HTTP/1.1 413", response);
+    }
+
+    [Fact]
+    public async Task UnfinishedHead_IsAnswered408()
+    {
+        await using var server = TestServer.Start(Routes,
+            app => app.AddDefault(FrameworkDefaults.ServerHeadersTimeoutSeconds, "1"));
+
+        var response = await server.SendRawAsync("GET /echo HTTP/1.1\r\nHost: local");
+
+        Assert.StartsWith("HTTP/1.1 408", response);
+    }
+
+    private static void Routes(GroupRoute routes) => routes
+        .AddPost("/ignore", (_, context) => Task.FromResult(context.Response().Text("ignored")))
+        .AddPost("/echo", Echo)
+        .AddGet("/echo", Echo);
+
+    private static async Task<HttpResponse> Echo(HttpRequest request, HttpContext context)
+        => context.Response().Text(Encoding.UTF8.GetString((await request.BufferBodyAsync()).Span));
+
+    private static string[] Statuses(string response)
+        => Regex.Matches(response, @"HTTP/1\.1 (\d{3})").Select(m => m.Groups[1].Value).ToArray();
 }

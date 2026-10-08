@@ -29,6 +29,7 @@ public class NoteStore
             if (_notes.TryUpdate(id, updated, current))
                 return updated;
         }
+
         return null;
     }
 

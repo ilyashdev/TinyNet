@@ -2,10 +2,11 @@ using System.Text.Json;
 
 namespace TinyNet.Http;
 
-internal sealed class HttpSettings
+public sealed class HttpSettings
 {
     public JsonSerializerOptions Options { get; }
     public long MaxBodyLength { get; }
+
     internal HttpSettings(JsonSerializerOptions options, long maxBodyLength)
     {
         Options = options;

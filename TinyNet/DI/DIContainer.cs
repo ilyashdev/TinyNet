@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Linq.Expressions;
 
 namespace TinyNet.DI;
@@ -6,7 +7,7 @@ namespace TinyNet.DI;
 public class DIContainer : IAsyncDisposable
 {
     private readonly DIScope _rootScope;
-    private bool _frozen; 
+    private bool _frozen;
     private readonly ConcurrentDictionary<Type, Lazy<object>> _singletonInstances = new();
     private readonly ConcurrentStack<object> _singletonDisposables = new();
     private readonly Dictionary<Type, ServiceDescriptor> _descriptors = new();
@@ -59,10 +60,12 @@ public class DIContainer : IAsyncDisposable
     internal void Freeze()
     {
         var diServices = _descriptors.Where(d => !_singletonInstances.ContainsKey(d.Key));
-        _ctorParams = diServices.ToDictionary(kv => kv.Value.ServiceType, kv => kv.Value.ImplementationType.GetConstructors()
+        _ctorParams = diServices.ToDictionary(kv => kv.Value.ServiceType, kv => kv.Value.ImplementationType
+            .GetConstructors()
             .OrderByDescending(c => c.GetParameters().Length)
             .First().GetParameters().Select(p => p.ParameterType).ToArray());
-        _factories = diServices.ToDictionary(kv => kv.Value.ServiceType, kv => BuildFactory(kv.Value.ImplementationType));
+        _factories =
+            diServices.ToDictionary(kv => kv.Value.ServiceType, kv => BuildFactory(kv.Value.ImplementationType));
         _frozen = true;
     }
 
@@ -127,9 +130,9 @@ public class DIContainer : IAsyncDisposable
     internal object GetSingleton(Type serviceType)
     {
         if (!_descriptors.TryGetValue(serviceType, out var descriptor))
-            throw new InvalidOperationException($"INTERNAL FRAMEWORK: Service type {serviceType.Name} not registered");
+            throw new UnreachableException($"Service type {serviceType.Name} not registered");
         if (descriptor.Lifetime != ServiceLifetime.Singleton)
-            throw new InvalidOperationException($"INTERNAL FRAMEWORK: Service type {serviceType.Name} not singleton");
+            throw new UnreachableException($"Service type {serviceType.Name} not singleton");
         return GetSingleton(descriptor, new());
     }
 
@@ -141,8 +144,8 @@ public class DIContainer : IAsyncDisposable
 
     private object GetService(Type serviceType, DIScope scope, HashSet<Type> resolving)
     {
-        if (!_frozen)                                                                                                                                                                                                                                    
-            throw new InvalidOperationException("Container is not built");   
+        if (!_frozen)
+            throw new InvalidOperationException("Container is not built");
         if (!_descriptors.TryGetValue(serviceType, out var descriptor))
             throw new InvalidOperationException($"Service {serviceType.Name} not registered");
         return descriptor.Lifetime switch
@@ -167,7 +170,7 @@ public class DIContainer : IAsyncDisposable
                     return instance;
                 },
                 LazyThreadSafetyMode.ExecutionAndPublication));
-        
+
         return lazy.Value;
     }
 
@@ -226,7 +229,8 @@ public class DIContainer : IAsyncDisposable
                 errors.Add(ex);
             }
         }
-        if(errors.Count > 0)
+
+        if (errors.Count > 0)
             throw new AggregateException(errors);
     }
 }

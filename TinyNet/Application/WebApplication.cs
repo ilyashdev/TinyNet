@@ -1,192 +1,126 @@
+using System.Net;
 using System.Net.Sockets;
-using System.Threading.Channels;
-using TinyNet.ActionResult.Results;
-using TinyNet.Configurations;
 using TinyNet.DI;
 using TinyNet.Http;
-using TinyNet.Middlewares;
-
-
+using TinyNet.Protocols;
+using TinyNet.Transport;
 
 namespace TinyNet.Application;
 
-public class WebApplication
+public sealed class WebApplication
 {
-    private readonly NetHandler _handler;
-    private readonly MiddlewarePipeline _pipeline;
-    private readonly IConfiguration _configuration;
+    private static readonly TimeSpan AcceptRetryDelay = TimeSpan.FromMilliseconds(100);
+    private const int AcceptRetryJitterMs = 100;
+
+    private readonly IConnectionListener _listener;
+    private readonly IHttpProtocol _protocol;
+    private readonly RequestDelegate _app;
     private readonly DIContainer _container;
-    public WebApplication(
-        NetHandler handler,
-        MiddlewarePipeline pipeline,
-        IConfiguration configuration,
-        DIContainer container)
+    private readonly int _maxPending;
+    private readonly int _acceptLoops;
+    private readonly HashSet<Task> _connections = [];
+    private readonly Lock _lock = new();
+    private int _pending;
+
+    internal WebApplication(
+        IConnectionListener listener,
+        IHttpProtocol protocol,
+        RequestDelegate app,
+        DIContainer container,
+        int maxConnections,
+        int acceptLoops)
     {
-        _handler = handler;
-        _pipeline = pipeline;
-        _configuration = configuration;
+        _listener = listener;
+        _protocol = protocol;
+        _app = app;
         _container = container;
+        _maxPending = maxConnections;
+        _acceptLoops = acceptLoops;
     }
 
-  
-    public int Port => _handler.Port;
+    public int Port => ((IPEndPoint)_listener.EndPoint).Port;
 
     public async Task Run(CancellationToken ct = default)
     {
-        var port = _configuration.GetValue<int>(FrameworkDefaults.ServerPort);
-        Console.WriteLine($"Application started on http://localhost:{port}");
+        Console.WriteLine($"Application started on http://localhost:{Port}");
         try
         {
-            await RunAcceptThread(ct);
-        }
-        catch (Exception e)
-        {
-            Console.WriteLine(e);
+            await Task.WhenAll(Enumerable.Range(0, _acceptLoops).Select(_ => AcceptLoopAsync(ct)));
         }
         finally
         {
+            _listener.Dispose();
+            Task[] running;
+            lock (_lock)
+                running = [.. _connections];
+            await Task.WhenAll(running);
             await _container.DisposeAsync();
-            Console.WriteLine($"Application stopped on http://localhost:{port}");
+            Console.WriteLine($"Application stopped on http://localhost:{Port}");
         }
     }
-    
-    private Task RunAcceptThread(CancellationToken ct)
+
+    private async Task AcceptLoopAsync(CancellationToken ct)
     {
-        var finished = new TaskCompletionSource();
-        var thread = new Thread(() =>
+        while (!ct.IsCancellationRequested)
+        {
+            Connection connection;
+            try
+            {
+                connection = await _listener.AcceptAsync(ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (SocketException e)
+            {
+                Console.WriteLine($"Accept error: {e.Message}");
+                var jitter = TimeSpan.FromMilliseconds(Random.Shared.Next(AcceptRetryJitterMs));
+                await Task.Delay(AcceptRetryDelay + jitter, ct).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+                continue;
+            }
+
+            Track(Task.Run(() => ServeAsync(connection, ct)));
+        }
+    }
+
+    private async Task ServeAsync(Connection connection, CancellationToken ct)
+    {
+        await using (connection)
         {
             try
             {
-                AcceptLoop(ct);
+                if (Interlocked.Increment(ref _pending) > _maxPending)
+                    await _protocol.RejectAsync(connection, StatusCodes.ServiceUnavailable, "Server is overloaded.", ct);
+                else
+                {
+                        await _protocol.ProcessAsync(connection, _app, ct);
+                }
+            }
+            catch (Exception e) when (e is IOException or OperationCanceledException)
+            {
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine($"Connection error: {e}");
             }
             finally
             {
-                finished.SetResult();
+                Interlocked.Decrement(ref _pending);
             }
-        })
-        {
-            IsBackground = true,
-            Name = "tinynet-accept"
-        };
-        thread.Start();
-        return finished.Task;
-    }
 
-    private void AcceptLoop(CancellationToken ct)
-    {
-        using var stopping = ct.Register(_handler.StopListening);
-        while (!ct.IsCancellationRequested)
-        {
-            NetClient client = null;
-            try
-            {
-                client = _handler.Accept();
-            }
-            catch (Exception ex) when (ex is ObjectDisposedException or SocketException)
-            {
-                client?.Dispose();
-                if (ct.IsCancellationRequested)
-                    return;
-                Console.WriteLine($"Accept error: {ex.Message}");
-            }
-            catch (Exception ex)
-            {
-                client?.Dispose();
-                Console.WriteLine($"Accept error: {ex.InnerException?.Message ?? ex.Message}");
-            }
-        }
-    }
-    
-    private async Task ProcessClient(NetClient client, CancellationToken ct)
-    {
-        var keepAliveMax = _configuration.GetValue<int>(FrameworkDefaults.ServerKeepAliveMax);
-        var keepAliveTimeout = TimeSpan.FromSeconds(_configuration.GetValue<int>(FrameworkDefaults.ServerKeepAliveTimeout));
-        using (client)
-        {
-            for (int remaining = keepAliveMax; remaining > 0; remaining--)
-            {
-                await using DIScope scope = _container.CreateScope();
-                var idleTimeout = remaining == keepAliveMax ? (TimeSpan?)null : keepAliveTimeout;
-                var response = await BuildResponse(client, scope, idleTimeout, remaining > 1, ct);
-                if (response is null)
-                    return;
-
-                await SendSafely(client, response);
-                if (!IsKeepAlive(response))
-                    return;
-            }
+            await connection.CloseGracefullyAsync();
         }
     }
 
-    private static bool IsKeepAlive(HttpResponse response)
-        => response.Headers.TryGetValue("Connection", out var connection)
-           && connection.Equals("keep-alive", StringComparison.OrdinalIgnoreCase);
-
-    private async Task<HttpResponse?> BuildResponse(
-        NetClient client, DIScope scope, TimeSpan? idleTimeout, bool allowKeepAlive, CancellationToken ct)
+    private void Track(Task task)
     {
-        try
+        lock (_lock)
+            _connections.Add(task);
+        task.ContinueWith(t =>
         {
-            HttpRequest request = idleTimeout is null
-                ? await client.GetRequest(ct)
-                : await client.GetRequest(idleTimeout.Value, ct);
-            var response = await Dispatch(new HttpContext(scope, request, ct));
-            if (!response.Headers.ContainsKey("Connection"))
-                response.Headers["Connection"] =
-                    allowKeepAlive && Http.Http.IsKeepAlive(request) ? "keep-alive" : "close";
-            return response;
-        }
-        catch (ConnectionClosedException)
-        {
-            return null;
-        }
-        catch (OperationCanceledException)
-        {
-            return null;
-        }
-        catch (Exception ex)
-        {
-            var response = ToErrorResponse(ex);
-            Console.WriteLine(response.StatusCode == 500
-                ? $"Processing error: {ex}"
-                : $"Request rejected: {ex.Message}");
-            return response;
-        }
-    }
-
-    private async Task<HttpResponse> Dispatch(HttpContext context)
-    {
-        try
-        {
-            await _pipeline.InvokeAsync(context);
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Processing error: {ex.InnerException?.ToString() ?? ex.ToString()}");
-            new InternalError().ExecuteResult(context);
-        }
-
-        return context.Response ?? new HttpResponse(500, "Internal server error");
-    }
-
-    private static HttpResponse ToErrorResponse(Exception ex) => ex switch
-    {
-        RequestTooLargeException => new HttpResponse(413, "Content too large"),
-        RequestTimeoutException => new HttpResponse(408, "Request timeout"),
-        BadRequestException => new HttpResponse(400, "Bad request"),
-        _ => new HttpResponse(500, "Internal server error")
-    };
-
-    private static async Task SendSafely(NetClient client, HttpResponse response)
-    {
-        try
-        {
-            if (client.IsConnected())
-                await client.SendResponse(response);
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Send error: {ex.Message}");
-        }
+            lock (_lock)
+                _connections.Remove(t);
+        }, TaskScheduler.Default);
     }
 }

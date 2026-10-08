@@ -3,27 +3,40 @@ using System.Net.Sockets;
 
 namespace TinyNet.Transport;
 
-public class TcpConnectionListener : IConnectionListener
+public sealed class TcpConnectionListener : IConnectionListener
 {
-    private readonly Socket _client;
-    public TcpConnectionListener(int port)
+    private readonly Socket _listener;
+
+    public TcpConnectionListener(int port, int backlog)
     {
-        _client = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-        EndPoint = _client.LocalEndPoint                                                                                                                                                                                                             
-                   ?? throw new InvalidOperationException("Listener socket has no local endpoint after Bind");     
+        if (Socket.OSSupportsIPv6)
+        {
+            _listener = new Socket(AddressFamily.InterNetworkV6, SocketType.Stream, ProtocolType.Tcp);
+            _listener.DualMode = true;
+            _listener.Bind(new IPEndPoint(IPAddress.IPv6Any, port));
+        }
+        else
+        {
+            _listener = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+            _listener.Bind(new IPEndPoint(IPAddress.Any, port));
+        }
+
+        _listener.Listen(backlog);
+        EndPoint = _listener.LocalEndPoint
+                   ?? throw new InvalidOperationException("Listener socket has no local endpoint after Bind");
     }
-    
+
     public EndPoint EndPoint { get; }
-    
-    public Connection Accept()
+
+    public async ValueTask<Connection> AcceptAsync(CancellationToken ct)
     {
-        var connection = _client.Accept();
-        connection.NoDelay = true;
-        return new Connection(new NetworkStream(connection, true), _client.RemoteEndPoint);
+        var socket = await _listener.AcceptAsync(ct);
+        socket.NoDelay = true;
+        return new Connection(new NetworkStream(socket, ownsSocket: true), socket.RemoteEndPoint);
     }
-    
+
     public void Dispose()
     {
-        _client.Dispose();
+        _listener.Dispose();
     }
 }

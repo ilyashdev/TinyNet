@@ -32,8 +32,8 @@ public sealed class Endpoint
         _chain = MiddlewarePipeline.Compose(filters, _handler);
     }
 
-    internal Task InvokeAsync(HttpContext context)
-        => (_chain ?? throw new InvalidOperationException($"{this}: endpoint is not linked"))(context);
+    internal Task<HttpResponse> InvokeAsync(HttpRequest request, HttpContext context)
+        => (_chain ?? throw new InvalidOperationException($"{this}: endpoint is not linked"))(request, context);
 
     public override string ToString() => $"{Method} {Template}";
 }

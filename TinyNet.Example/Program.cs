@@ -1,6 +1,6 @@
 using TinyNet.Application;
-using TinyNet.Example.Controllers;
 using TinyNet.Example.Filters;
+using TinyNet.Example.Handlers;
 using TinyNet.Example.Middlewares;
 using TinyNet.Example.Services;
 
@@ -15,48 +15,51 @@ builder
     .AddJsonConfig("config.json")
     .AddEnvironmentVariables("TINYNET_");
 
-
 builder.RegisterMiddleware<RequestIdMiddleware>();
 
 // EN: Singleton — one instance for the whole application, shared by parallel requests.
 //     Scoped — one instance per HTTP request.
-//     Controllers and filters are not registered here: the framework registers them from the routes below.
+//     Handler classes and filters are not registered here: the framework registers them from the routes below.
 // RU: Singleton — один экземпляр на всё приложение, общий для параллельных запросов.
 //     Scoped — один экземпляр на HTTP-запрос.
-//     Контроллеры и фильтры здесь не регистрируются: фреймворк сам регистрирует их из маршрутов ниже.
+//     Классы обработчиков и фильтры здесь не регистрируются: фреймворк сам регистрирует их из маршрутов ниже.
 builder.Services.AddSingleton<VisitCounter>();
 builder.Services.AddSingleton<NoteStore>();
 builder.Services.AddScoped<RequestId>();
 
-// EN: Routes are the only place where paths are declared. Paths are built from groups only;
-//     a handler is attached to the end of its group and returns the same group, so calls chain.
-// RU: Маршруты — единственное место, где объявляются пути. Путь строится только из групп;
-//     обработчик вешается на конец своей группы и возвращает ту же группу, поэтому вызовы идут цепочкой.
-builder.Routes
-    .AddGetHandler<HomeController>();
+// EN: Routes are the only place where paths are declared. An endpoint is a method + path + handler.
+//     "h => h.Index" picks a method of a handler class; the compiler checks that it matches
+//     (HttpRequest, HttpContext) -> Task<HttpResponse>. The class is created from DI for every request.
+// RU: Маршруты — единственное место, где объявляются пути. Эндпоинт — это метод + путь + обработчик.
+//     "h => h.Index" выбирает метод класса-обработчика; компилятор проверяет, что он подходит под
+//     (HttpRequest, HttpContext) -> Task<HttpResponse>. Класс создаётся из DI на каждый запрос.
+builder.Routes.AddGet<HomeHandler>("/", h => h.Index);
 
-// EN: A group filter applies to every endpoint inside the group, including nested groups.
-//     Filters run from the outer group to the inner one, then the endpoint's own filters.
-// RU: Фильтр группы действует на все эндпоинты внутри неё, включая вложенные группы.
-//     Фильтры выполняются от внешней группы к внутренней, затем идут фильтры самого эндпоинта.
-var notes = builder.Routes
+// EN: A handler does not need a class: any delegate with the same signature works. Nothing is registered in DI.
+// RU: Обработчику не обязателен класс: подходит любой делегат с той же сигнатурой. В DI ничего не регистрируется.
+builder.Routes.AddGet("/health", (request, context) =>
+    Task.FromResult(context.Response().Text("ok")));
+
+// EN: A group adds a path prefix and filters. A group filter applies to every endpoint inside it,
+//     including nested groups; filters run from the outer group to the inner one, then the endpoint's own.
+//     One handler class may serve several paths: "/" and "/{id}" below both go to NotesHandler.
+// RU: Группа добавляет префикс пути и фильтры. Фильтр группы действует на все эндпоинты внутри неё,
+//     включая вложенные группы; фильтры идут от внешней группы к внутренней, затем фильтры эндпоинта.
+//     Один класс-обработчик может обслуживать несколько путей: "/" и "/{id}" ниже ведут в NotesHandler.
+builder.Routes
     .AddGroup("/api")
     .AddFilter<ApiKeyFilter>()
     .AddGroup("/notes")
-    .AddGetHandler<NotesController>()
-    .AddPostHandler<NotesController>();
-
-// EN: "{id}" becomes a route value read with context.GetFromRoute<int>("id").
-//     The setup delegate attaches a filter to one method only: AdminFilter guards DELETE, not GET.
-//     A known path with an unregistered method answers 405, an unknown path answers 404.
-// RU: "{id}" становится значением маршрута, которое читается через context.GetFromRoute<int>("id").
-//     Делегат настройки навешивает фильтр только на один метод: AdminFilter защищает DELETE, но не GET.
-//     На известный путь с незарегистрированным методом ответ 405, на неизвестный путь — 404.
-notes.AddGroup("{id}")
-    .AddGetHandler<NoteController>()
-    .AddPutHandler<NoteController>()
-    .AddPatchHandler<NoteController>()
-    .AddDeleteHandler<NoteController>(endpoint => endpoint.AddFilter<AdminFilter>());
+    .AddGet<NotesHandler>("/", h => h.List)
+    .AddPost<NotesHandler>("/", h => h.Create)
+    .AddGet<NotesHandler>("/{id}", h => h.Get)
+    .AddPut<NotesHandler>("/{id}", h => h.Replace)
+    .AddPatch<NotesHandler>("/{id}", h => h.Update)
+    // EN: The last argument configures one endpoint only: AdminFilter guards DELETE, not GET.
+    //     A known path with an unregistered method answers 405 with an Allow header, an unknown path answers 404.
+    // RU: Последний аргумент настраивает только один эндпоинт: AdminFilter защищает DELETE, но не GET.
+    //     На известный путь с незарегистрированным методом ответ 405 с заголовком Allow, на неизвестный путь — 404.
+    .AddDelete<NotesHandler>("/{id}", h => h.Delete, endpoint => endpoint.AddFilter<AdminFilter>());
 
 // EN: Build checks everything at startup: duplicate routes, a filter applied twice,
 //     a singleton that captures a scoped service. Mistakes fail here, not on the first request.

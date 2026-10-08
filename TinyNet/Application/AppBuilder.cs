@@ -1,9 +1,11 @@
-using TinyNet.ActionResult.Results;
+using System.Text.Json;
 using TinyNet.Configurations;
 using TinyNet.DI;
 using TinyNet.Http;
 using TinyNet.Middlewares;
+using TinyNet.Protocols.Http1;
 using TinyNet.Routing;
+using TinyNet.Transport;
 
 namespace TinyNet.Application;
 
@@ -11,9 +13,9 @@ public class AppBuilder
 {
     public DIContainer Services { get; init; }
     public GroupRoute Routes { get; } = new("/");
-    private NetHandler _netHandler;
     private ConfigurationBuilder _configBuilder { get; init; }
     private MiddlewarePipeline _pipeline { get; init; }
+    private readonly JsonSerializerOptions _json = new(JsonSerializerDefaults.Web);
     private bool _isBuilt = false;
 
     public AppBuilder()
@@ -26,7 +28,6 @@ public class AppBuilder
 
     public AppBuilder AddDefault(string key, string value)
     {
-        
         _configBuilder.AddDefault(key, value);
         return this;
     }
@@ -55,6 +56,12 @@ public class AppBuilder
         return this;
     }
 
+    public AppBuilder Json(Action<JsonSerializerOptions> configure)
+    {
+        configure(_json);
+        return this;
+    }
+
     public WebApplication Build()
     {
         if (_isBuilt)
@@ -62,11 +69,19 @@ public class AppBuilder
         _isBuilt = true;
         var conf =
             _configBuilder
-
                 .Build();
 
         Services.AddInstance(conf);
-        _netHandler = new(conf.GetValue<int>(FrameworkDefaults.ServerPort), ReadHttpLimits(conf));
+        _json.MakeReadOnly(populateMissingResolver: true);
+        var settings = new HttpSettings(_json, conf.GetValue<long>(FrameworkDefaults.ServerMaxBodyBytes));
+        var limits = new ServerLimits(
+            TimeSpan.FromSeconds(conf.GetValue<int>(FrameworkDefaults.ServerKeepAliveTimeoutSeconds)),
+            TimeSpan.FromSeconds(conf.GetValue<int>(FrameworkDefaults.ServerHeadersTimeoutSeconds)),
+            TimeSpan.FromSeconds(conf.GetValue<int>(FrameworkDefaults.ServerBodyGracePeriodSeconds)),
+            conf.GetValue<double>(FrameworkDefaults.ServerMinBodyBytesPerSecond),
+            conf.GetValue<int>(FrameworkDefaults.ServerKeepAliveMax),
+            conf.GetValue<int>(FrameworkDefaults.ServerMaxHeadBytes));
+
         var endpoints = RouteCompiler.Compile(Routes, Services);
         var router = new UrlRouter(endpoints);
         Services.Freeze();
@@ -74,25 +89,56 @@ public class AppBuilder
         foreach (var endpoint in endpoints)
             endpoint.Link(Services);
         _pipeline.Build(new RouteDispatcher(router, NotFound).InvokeAsync);
+
+        var acceptLoops = conf.GetValue<int>(FrameworkDefaults.ServerAcceptLoops);
+        if (acceptLoops < 1)
+            throw new InvalidOperationException($"{FrameworkDefaults.ServerAcceptLoops} must be at least 1, got {acceptLoops}");
+
         return new WebApplication(
-            _netHandler,
-            _pipeline,
-            conf,
-            Services
-        );
+            new TcpConnectionListener(
+                conf.GetValue<int>(FrameworkDefaults.ServerPort),
+                conf.GetValue<int>(FrameworkDefaults.ServerListenBacklog)),
+            new ConnectionHandler(settings, Services, limits),
+            LimitConcurrency(_pipeline.InvokeAsync,
+                conf.GetValue<int>(FrameworkDefaults.ServerMaxConcurrentRequests),
+                conf.GetValue<int>(FrameworkDefaults.ServerMaxQueuedRequests),
+                conf.GetValue<int>(FrameworkDefaults.ServerRequestQueueTimeoutSeconds)),
+            Services,
+            conf.GetValue<int>(FrameworkDefaults.ServerMaxConnections),
+            acceptLoops);
     }
 
-    private static Task NotFound(HttpContext context)
+    internal static RequestDelegate LimitConcurrency(RequestDelegate app, int max, int queue, int seconds)
     {
-        new NotFound().ExecuteResult(context);
-        return Task.CompletedTask;
+        var slots = new SemaphoreSlim(max, max);
+        var wait = TimeSpan.FromSeconds(seconds);
+        var inSystem = 0;
+        return async (request, context) =>
+        {
+            try
+            {
+                if (Interlocked.Increment(ref inSystem) > max + queue || !await slots.WaitAsync(wait))
+                    return context.Response()
+                        .Status(StatusCodes.ServiceUnavailable)
+                        .AddHeader(HeaderNames.Connection, "close")
+                        .Text("Server is overloaded.");
+                try
+                {
+                    return await app(request, context);
+                }
+                finally
+                {
+                    slots.Release();
+                }
+            }
+            finally
+            {
+                Interlocked.Decrement(ref inSystem);
+            }
+        };
     }
 
-    private static HttpLimits ReadHttpLimits(IConfiguration conf) =>
-        new(
-            conf.GetValue<int>(FrameworkDefaults.ServerMaxHeadBytes),
-            conf.GetValue<int>(FrameworkDefaults.ServerMaxBodyBytes),
-            conf.GetValue<int>(FrameworkDefaults.ServerReceiveBufferSize),
-            TimeSpan.FromSeconds(conf.GetValue<int>(FrameworkDefaults.ServerReadTimeoutSeconds))
-        );
+    private static Task<HttpResponse> NotFound(HttpRequest request, HttpContext context)
+        => Task.FromResult(context.Response().Status(StatusCodes.NotFound).Empty());
+
 }

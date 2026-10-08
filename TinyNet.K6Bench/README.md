@@ -1,6 +1,6 @@
 # Load tests (k6)
 
-Measurements against the simulator endpoints in `LoadControllers.cs`.
+Measurements against the simulator endpoints in `LoadHandlers.cs`.
 
 [Русская версия](README.ru.md)
 
@@ -31,7 +31,9 @@ k6 run -e RATE=110000 -e VUS=1024 -e DURATION=10s saturation.js
 `saturation.js` is the flat-out one: a `constant-arrival-rate` executor with a fixed VU pool,
 used to find the throughput ceiling and the point where refusals begin. `RATE`, `VUS`,
 `DURATION` and `TARGET` (default `/load/io?ms=0`) are all env knobs; `NOREUSE=1` turns off
-connection reuse, which turns the scenario into a fresh-connection storm.
+connection reuse, which turns the scenario into a fresh-connection storm. `JITTER=N` (default 1)
+makes every VU wait a random 0–N seconds before its first request, so the connections are not
+opened all at once; `JITTER=0` measures the connect burst.
 
 Point them elsewhere with `-e BASE_URL=http://host:port`.
 
@@ -41,8 +43,9 @@ Point them elsewhere with `-e BASE_URL=http://host:port`.
 for `:`. Key names are case-sensitive — they are compared as written:
 
 ```bash
-TINYNET_Server__MaxConcurrentRequests=64 dotnet run    # worker count
-TINYNET_Server__MaxQueuedConnections=256 dotnet run    # queue capacity
+TINYNET_Server__MaxConcurrentRequests=64 dotnet run    # requests handled at once
+TINYNET_Server__MaxQueuedRequests=256 dotnet run       # requests waiting for a slot
+TINYNET_Server__MaxConnections=20000 dotnet run        # open connections
 TINYNET_Server__MaxBodyBytes=1048576 dotnet run        # body limit
 ```
 
@@ -58,11 +61,11 @@ k6 run -e N=64 -e QUEUE=64 -e MS=1000 knee-io.js
 
 ## Endpoints
 
-| Path | What is occupied during handling | Purpose |
-|---|---|---|
-| `/` | nothing, answers `"ok"` | `baseline.js` and `errors.js` |
-| `/load/cpu?ms=N` | a core; the pool thread does real work | CPU saturation |
-| `/load/io?ms=N` | nothing (`Task.Delay`) | the normal shape of a web handler |
+| Path               | What is occupied during handling       | Purpose                               |
+|--------------------|----------------------------------------|---------------------------------------|
+| `/`                | nothing, answers `"ok"`                | `baseline.js` and `errors.js`         |
+| `/load/cpu?ms=N`   | a core; the pool thread does real work | CPU saturation                        |
+| `/load/io?ms=N`    | nothing (`Task.Delay`)                 | the normal shape of a web handler     |
 | `/load/block?ms=N` | a pool thread, idling (`Thread.Sleep`) | cost of sync code in an async handler |
 
 `ms` is required — without it, or with a non-numeric value, the handler answers 400.
@@ -87,11 +90,11 @@ and actual RPS instead.
 own work is `http_req_waiting` (TTFB). With keep-alive the handshake is paid once per
 connection instead of once per request, so the two readings are now close.
 
-**Size the worker pool by connections, not by rate.** A worker owns a connection for its
-whole life, so `Server:MaxConcurrentRequests` is the number of simultaneous clients. Give the
-run fewer VUs than workers, or you are measuring the queue rather than the server: 1024 VUs
-against 256 workers answered 200 rps out of 500 offered, at `p(95) = 22.96 s`, with no `503`
-and nothing in the server log.
+**Slots are per request, not per connection.** Since 2026-10-08 an idle keep-alive
+connection holds no slot, so the number of VUs is limited by `Server:MaxConnections`, not by
+`Server:MaxConcurrentRequests`. Before that a worker owned a connection for its whole life:
+1024 VUs against 256 workers answered 200 rps out of 500 offered, at `p(95) = 22.96 s`, with
+no `503` and nothing in the server log.
 
 **Ephemeral ports matter only without reuse.** With keep-alive a connection carries up to
 `Server:KeepAliveMax` requests, so a normal run burns few ports — 10k requests left 22 sockets
@@ -121,19 +124,66 @@ architectural conclusions from `io` and `block`.
 
 ## Results
 
-16 logical cores, measured 2026-09-17, 2026-09-18 and 2026-09-26.
+16 logical cores, measured 2026-09-17, 2026-09-18, 2026-09-26 and 2026-10-08.
+
+### 2026-10-08: slot per request, accept settings
+
+Release build, `/load/io?ms=0`, 200 000 rps offered, 10 s, k6 on the same machine.
+
+**Throughput by VU count** (`AcceptLoops = 1`, no jitter):
+
+| VUs   | Served      | p(95)   | connect-level refusals |
+|-------|-------------|---------|------------------------|
+| 150   | 145 829     | 1.00 ms | 0                      |
+| 256   | 134 807     | 1.95 ms | 251                    |
+| 512   | **149 264** | 3.31 ms | 627                    |
+| 1 024 | 104 573     | 11.2 ms | 5 643                  |
+| 2 048 | 109 829     | 22.7 ms | 5 645                  |
+
+No `503` at any VU count, even 2 048 connections against 256 slots. 200k was not reached: at
+150 VUs the server answers in 0.22 ms on average while a VU iteration takes 1.03 ms, so k6
+itself is the limit. Past 512 VUs both processes fight for the same cores.
+
+**Refusals on a connection burst** (1 024 VUs):
+
+| `AcceptLoops` | `ListenBacklog` | `JITTER` | Refusals | Served  |
+|---------------|-----------------|----------|----------|---------|
+| 1             | 512             | 0        | 6 086    | 116 706 |
+| 1             | 4 096           | 0        | 6 238    | 122 530 |
+| 4             | 512             | 0        | 1 691    | 122 844 |
+| 16            | 512             | 0        | 1 389    | 124 835 |
+| 1             | 512             | 1 s      | **0**    | 108 489 |
+| 4             | 4 096           | 1 s      | **0**    | 107 131 |
+
+Every refusal is `dial: connection refused` in the first second, while all VUs connect at once.
+A larger backlog changes nothing on Windows; more accept loops remove most refusals, with little
+gain past 4; client jitter removes them entirely. The lower rate in the jitter rows is the idle
+start, not the server. Moving connection handling off the accept loop (`Task.Run`) halved the refusals with one
+loop (2 339 and 3 025 over two runs); four loops still gave 1 312–1 546. The default stays at
+one loop, and `saturation.js` runs with `JITTER=1` by default.
+
+**Keep-alive no longer starves the queue.** `knee-io.js`, N = 64, queue = 64, handler 1000 ms,
+predicted worst latency 2 s:
+
+|                            | `200` | `503` | max    |
+|----------------------------|-------|-------|--------|
+| keep-alive `1000/5`        | 2 395 | 6     | 2.01 s |
+| keep-alive `1000/60`       | 2 396 | 5     | 2.02 s |
+
+Same as 2026-09-17 without keep-alive: an idle connection holds no slot, so the keep-alive
+timeout no longer affects the queue.
 
 ### 2026-09-26: after the switch to explicit routes
 
 Release build. The goal is to confirm that the new routing, filters and data reading did not
 cost anything.
 
-| Scenario | 2026-09-18 | 2026-09-26 |
-|---|---|---|
-| `saturation.js`, 60 000 rps | 59 673 rps, p(95) 2.06 ms | 59 514 rps, p(95) 3.12 ms |
-| `saturation.js`, 110 000 rps | 91 356 rps, p(95) 13.24 ms | **104 467 rps**, p(95) 7.65 ms |
-| `baseline.js`, up to 500 rps | — | 9 999 requests, 0 errors |
-| `errors.js`, `MODE=oversize` | — | 6 001 × `413`, no dropped connections |
+| Scenario                     | 2026-09-18                 | 2026-09-26                            |
+|------------------------------|----------------------------|---------------------------------------|
+| `saturation.js`, 60 000 rps  | 59 673 rps, p(95) 2.06 ms  | 59 514 rps, p(95) 3.12 ms             |
+| `saturation.js`, 110 000 rps | 91 356 rps, p(95) 13.24 ms | **104 467 rps**, p(95) 7.65 ms        |
+| `baseline.js`, up to 500 rps | —                          | 9 999 requests, 0 errors              |
+| `errors.js`, `MODE=oversize` | —                          | 6 001 × `413`, no dropped connections |
 
 The ceiling went up, but the comparison is not clean: the build profile of 2026-09-18 was not
 recorded.
@@ -141,31 +191,31 @@ recorded.
 **Keep-alive breaks the capacity formula.** `knee-io.js`, N = 64, queue = 64, handler
 1000 ms, predicted worst latency 2 s:
 
-| | `200` | `503` | max |
-|---|---|---|---|
-| 2026-09-17, before keep-alive | 2 395 | 6 | 2.02 s |
-| 2026-09-26, `KeepAliveMax=1` | 2 396 | 6 | 2.02 s |
-| 2026-09-26, keep-alive `1000/5` | 2 330 | 71 | **53.57 s** |
+|                                 | `200` | `503` | max         |
+|---------------------------------|-------|-------|-------------|
+| 2026-09-17, before keep-alive   | 2 395 | 6     | 2.02 s      |
+| 2026-09-26, `KeepAliveMax=1`    | 2 396 | 6     | 2.02 s      |
+| 2026-09-26, keep-alive `1000/5` | 2 330 | 71    | **53.57 s** |
 
 Without keep-alive the result matches 2026-09-17 almost to the request — no regression. With
 keep-alive a client that got a worker sends without pauses, so `KeepAliveTimeout` (the pause
 *between* requests) never fires and the connection holds its worker for up to `KeepAliveMax`
 requests. Queued connections wait until the test ends — 53 s is the length of the run, not a
-bound. p(95) stays at 1.01 s: only the queued clients suffer. The fix is to read requests on
-the accepting side, so that workers take requests rather than connections.
+bound. p(95) stays at 1.01 s: only the queued clients suffer. Fixed on 2026-10-08 by taking
+the slot per request instead of per connection, see above.
 
 ### The ceiling is ~90k rps, and it is not where refusals start
 
 Measured 2026-09-18 on `/load/io?ms=0` (a 23-byte JSON body), keep-alive `1000/5`, N = 2048,
 queue = 2048, `ReceiveBufferSize` = 4096.
 
-| Offered | Served | p(95) | `503` | connect-level refusals |
-|---|---|---|---|---|
-| 60 000 | 59 673 | 2.06 ms | 0 | 298 |
-| 90 000 | 84 543 | 11.95 ms | 0 | 794 |
-| **110 000** | **91 356** | 13.24 ms | 0 | 841 |
-| 130 000 | 80 361 | 38.30 ms | 0 | 3 330 |
-| 150 000 | 84 287 | 35.76 ms | 0 | 2 914 |
+| Offered     | Served     | p(95)    | `503` | connect-level refusals |
+|-------------|------------|----------|-------|------------------------|
+| 60 000      | 59 673     | 2.06 ms  | 0     | 298                    |
+| 90 000      | 84 543     | 11.95 ms | 0     | 794                    |
+| **110 000** | **91 356** | 13.24 ms | 0     | 841                    |
+| 130 000     | 80 361     | 38.30 ms | 0     | 3 330                  |
+| 150 000     | 84 287     | 35.76 ms | 0     | 2 914                  |
 
 Throughput saturates near **90k rps**; past that only latency grows. Note the `503` column:
 over established connections the server does not refuse anything, it slows down. The
@@ -176,10 +226,10 @@ not an HTTP answer. k6 shares the machine and stops delivering at the top rows
 Refusals are governed by **connections**, not by rate. Capacity is
 `MaxConcurrentRequests + MaxQueuedConnections`, and crossing it produces honest `503`s:
 
-| Capacity | Clients | `200` | `503` |
-|---|---|---|---|
-| 64 + 64 | 512 | 3 648 | 21 341 |
-| 256 + 256 | 1 024 | 16 873 | 33 004 |
+| Capacity  | Clients | `200`  | `503`  |
+|-----------|---------|--------|--------|
+| 64 + 64   | 512     | 3 648  | 21 341 |
+| 256 + 256 | 1 024   | 16 873 | 33 004 |
 
 Of the tunables only the worker count matters, and only through that rule: at 512 VUs the
 settings 512, 1024 and 2048 gave 59 673 / 59 715 / 59 730 rps. `ReceiveBufferSize` of 4096,
@@ -190,11 +240,11 @@ settings 512, 1024 and 2048 gave 59 673 / 59 715 / 59 730 rps. `ReceiveBufferSiz
 Same offered load, 256 clients against 64 workers — the regime where connections outnumber
 slots:
 
-| `KeepAliveTimeout` | Served | max latency |
-|---|---|---|
-| 2 s | 908 rps | 8.89 s |
-| 5 s | 500 rps | 16.70 s |
-| 15 s | 282 rps | 19.92 s + client timeouts |
+| `KeepAliveTimeout` | Served  | max latency               |
+|--------------------|---------|---------------------------|
+| 2 s                | 908 rps | 8.89 s                    |
+| 5 s                | 500 rps | 16.70 s                   |
+| 15 s               | 282 rps | 19.92 s + client timeouts |
 
 `KeepAliveMax` does not participate: at a 2 s timeout, 100, 1000 and 10000 all produced the
 same 907 rps. It does matter for port churn and for the ceiling — 10k requests left 2588
@@ -227,14 +277,14 @@ rather than guessed, and overload produces honest 503s with bounded latency.
 Same machine, same rate (100 rps), same handler delay (500 ms), N = 256, queue = 128.
 Only the way the handler waits differs.
 
-| | `/load/io` (`Task.Delay`) | `/load/block` (`Thread.Sleep`) |
-|---|---|---|
-| Successful | 3001 | 2316 |
-| Honest 503s | 0 | 606 |
-| Connection-level failures | 0 | **0** |
-| `http_req_failed` | 0.00% | 0.00% |
-| Latency | avg 506 ms, max 535 ms | avg 1.50 s, max 3.48 s |
-| VUs needed | 51 | up to 228 |
+|                           | `/load/io` (`Task.Delay`) | `/load/block` (`Thread.Sleep`) |
+|---------------------------|---------------------------|--------------------------------|
+| Successful                | 3001                      | 2316                           |
+| Honest 503s               | 0                         | 606                            |
+| Connection-level failures | 0                         | **0**                          |
+| `http_req_failed`         | 0.00%                     | 0.00%                          |
+| Latency                   | avg 506 ms, max 535 ms    | avg 1.50 s, max 3.48 s         |
+| VUs needed                | 51                        | up to 228                      |
 
 `io` sits exactly on the handler's own 500 ms: 256 workers against an offered 100 rps means
 no queue at all.

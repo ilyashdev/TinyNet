@@ -11,29 +11,27 @@ conventions, binding or scanning somewhere out of sight.
 ## Why
 
 Large frameworks do a lot for you, and much of it happens where you cannot see it: model
-binding picks values, conventions pick handlers, scanning picks up classes, exceptions turn
-into responses in a distant handler. Several ways to configure the same thing affect each
-other. When the result is wrong, you debug the framework instead of your application.
+binding picks values, conventions pick handlers, scanning picks up classes. Several ways to
+configure the same thing affect each other. When the result is wrong, you debug the framework
+instead of your application.
 
 TinyNet goes the other way:
 
 - **Explicit control flow.** A request goes through the route tree, the filters you attached
-  and the handler you wrote. A handler reads the values it needs from `HttpContext`, gets
-  `null` when they are missing or malformed, and decides the answer itself. No exception
-  becomes a response somewhere else.
+  and the handler you wrote. A handler reads the values it needs from `HttpRequest` and returns
+  an `HttpResponse` it built itself.
 - **One way to do each thing.** Routes are declared in one tree in `Program.cs`, request data
-  is read from one place, filters are attached in one way. Two ways to do the same thing are
+  is read from one place, a response is built in one way. Two ways to do the same thing are
   treated as a bug.
-- **No bloat.** Its own HTTP server, DI container, configuration and pipeline in about
-  2 000 lines, with no NuGet dependencies and no ASP.NET underneath. What is not needed is not
-  there.
-- **The framework decides what is not worth choosing.** Lifetimes of controllers, filters and
-  middleware are fixed, and so is the concurrency model.
-- **Checked before the first request.** The compiler checks that a route points to a handler
-  that exists; `Build()` checks routes, filters and service lifetimes before the server
-  accepts a connection.
-- **Visible overload.** Connections are accepted on a dedicated thread into a bounded queue;
-  when the server is full, clients get `503`, not a dropped connection.
+- **No bloat.** Its own HTTP/1.1 server, DI container, configuration and pipeline in about
+  3 300 lines, with no NuGet dependencies and no ASP.NET underneath.
+- **The framework decides what is not worth choosing.** Lifetimes of handler classes, filters
+  and middleware are fixed, and so is the concurrency model.
+- **Checked before the first request.** The compiler checks that a route points to a method
+  with the right signature; `Build()` checks routes, filters and service lifetimes before the
+  server accepts a connection.
+- **Visible overload.** Requests beyond the concurrency limit wait in a bounded queue; when it
+  is full, clients get `503`, not a hanging or dropped connection.
 
 ---
 
@@ -45,27 +43,26 @@ TinyNet goes the other way:
 - Dependency injection with singleton, scoped and transient lifetimes
 - Lifetime validation at startup: a scoped dependency inside a singleton fails the build
 - Explicit route tree with groups, nested groups and templates such as `/users/{id}`
-- Controllers as plain classes implementing `IGetHandler`, `IPostHandler`, `IPutHandler`,
-  `IPatchHandler`, `IDeleteHandler`
+- Handlers as delegates or as methods of plain classes created from DI per request
 - Global middleware, and filters on route groups and on single endpoints
-- Automatic `404` for an unknown path and `405` for a known path with another method
-- Reading route, query, header and JSON body values from `HttpContext`
+- `404` for an unknown path, `405` with `Allow` for a known path with another method, `HEAD`
+  served by the `GET` endpoint
+- Reading route, query, header values and the body (stream, buffer or JSON) from `HttpRequest`
+- Response builder: status, headers, and a JSON, text, bytes, stream or empty body
 - Configuration from defaults, JSON and environment variables
-- Keep-alive connections, including pipelined requests
-- Request reading with fixed-length and chunked bodies
-- Configurable request limits, answered with `413`, `408` and `400`; a malformed JSON body is
-  one of them
-- Admission control: a bounded queue and a `503` when it is full
+- HTTP/1.1 and HTTP/1.0 parsed strictly by RFC 9112; keep-alive and pipelined requests
+- Fixed-length and chunked request bodies, `Expect: 100-continue`
+- Request limits answered with `400`, `408`, `413` and `431`
+- Concurrency: a slot per request, a bounded queue and `503` when it is full; a connection
+  limit
 
-**In progress**
+**Not yet**
 
-- Static files — the handler is being rewritten as a middleware and is not connected now
-- Request and response bodies as streams — a JSON body is parsed up front today
-- `HEAD`, `OPTIONS` and the `Allow` header on `405`
-- Concurrency: a worker owns a connection for its whole life. Under keep-alive a busy client
-  keeps its worker, and queued connections can wait until it leaves (see
-  [load tests](TinyNet.K6Bench/README.md)). The fix is to read requests on the accepting side
-  and hand workers requests instead of connections
+- Static files
+- Client address (`RemoteEndPoint`, `X-Forwarded-For`)
+- Logging abstraction: the framework writes to `Console`
+- Send timeout and a time limit on graceful shutdown
+- TLS, HTTP/2
 
 ---
 
@@ -77,26 +74,29 @@ var builder = new AppBuilder();
 builder.AddJsonConfig("config.json");
 builder.AddEnvironmentVariables("TINYNET_");
 
-builder.Services.AddSingleton<MyService>();
+builder.Services.AddSingleton<Greeter>();
 builder.RegisterMiddleware<LoggingMiddleware>();
+
+builder.Routes.AddGet("/health", (request, context) =>
+    Task.FromResult(context.Response().Text("ok")));
 
 builder.Routes
     .AddGroup("/hello")
-    .AddGetHandler<HelloController>();
+    .AddGet<HelloHandler>("/{name}", h => h.Get);
 
 var app = builder.Build();
 await app.Run();
 ```
 
 ```csharp
-public class HelloController : IGetHandler
+public class HelloHandler
 {
-    private readonly MyService _service;
+    private readonly Greeter _greeter;
 
-    public HelloController(MyService service) => _service = service;
+    public HelloHandler(Greeter greeter) => _greeter = greeter;
 
-    public Task<IActionResult> Get(HttpContext context)
-        => Task.FromResult<IActionResult>(new Ok(new { message = "Hello, World!" }));
+    public Task<HttpResponse> Get(HttpRequest request, HttpContext context)
+        => Task.FromResult(context.Response().Json(new { message = _greeter.Greet(request.GetFromRoute("name")) }));
 }
 ```
 
@@ -112,12 +112,12 @@ A complete application that uses every feature is in [`TinyNet.Example`](TinyNet
 
 ## Solution layout
 
-| Project | Purpose |
-|---|---|
-| `TinyNet` | The framework |
+| Project                                        | Purpose                                           |
+|------------------------------------------------|---------------------------------------------------|
+| `TinyNet`                                      | The framework                                     |
 | [`TinyNet.Example`](TinyNet.Example/README.md) | Example application using every framework feature |
-| [`TinyNet.Tests`](TinyNet.Tests/README.md) | Test suite |
-| [`TinyNet.K6Bench`](TinyNet.K6Bench/README.md) | Load simulators and k6 scenarios |
+| [`TinyNet.Tests`](TinyNet.Tests/README.md)     | Test suite                                        |
+| [`TinyNet.K6Bench`](TinyNet.K6Bench/README.md) | Load simulators and k6 scenarios                  |
 
 ---
 
@@ -132,42 +132,56 @@ AppBuilder
             │
             ▼
     WebApplication
-            ├── accept thread "tinynet-accept"
+            ├── accept loops         — Server:AcceptLoops; over Server:MaxConnections ⇒ 503, connection closed
             │       │
             │       ▼
-            ├── Channel<NetClient>   — bounded; full ⇒ 503
+            ├── one task per connection (Protocols/Http1)
             │       │
             │       ▼
-            └── worker pool          — N = Server:MaxConcurrentRequests
-                    │
-                    ▼
-            global middleware → router → group and endpoint filters → controller → IActionResult
+            ├── request limit        — Server:MaxConcurrentRequests running,
+            │                          Server:MaxQueuedRequests waiting ⇒ otherwise 503
+            │       │
+            │       ▼
+            └── global middleware → router → group and endpoint filters → handler → HttpResponse
 ```
 
+| Folder           | Contents                                                              | Depends on                     |
+|------------------|-----------------------------------------------------------------------|--------------------------------|
+| `Transport`      | sockets: `IConnectionListener`, `TcpConnectionListener`, `Connection` | —                              |
+| `Http`           | the model: `HttpRequest`, `ResponseBuilder`, `HttpResponse`, `HttpContext` | `DI`, `Exceptions`        |
+| `Protocols`      | HTTP/1.1 parser, body streams, response writer                        | `Http`, `Transport`, `DI`      |
+| `Middlewares`    | `IMiddleware`, the pipeline                                           | `Http`, `DI`                   |
+| `Routing`        | route tree, router, dispatcher                                        | `Http`, `Middlewares`, `DI`    |
+| `Application`    | `AppBuilder` wires everything together, `WebApplication` hosts it     | everything                     |
+
+The model knows nothing about sockets, and the transport knows nothing about HTTP.
+
 `AppBuilder.Build()` does all the work up front: it walks the route tree, registers
-controllers and filters in DI, builds the router, validates lifetimes, and composes every
+handler classes and filters in DI, builds the router, validates lifetimes, and composes every
 chain of filters. A mistake in any of them fails the build, not the first request.
 
 A request travels like this:
 
-1. A dedicated thread accepts the connection and writes it to a bounded channel. When the
-   channel is full that thread answers `503` itself and closes the connection.
-2. A worker takes the connection and keeps it until it ends, opening a fresh `DIScope` for
-   every request on it.
-3. The request is read under `HttpLimits`, which yields `413`, `408` or `400` when a limit
-   is exceeded or the request is malformed — including a body sent as `application/json` that
-   is not a JSON object. Bytes read past the end of one request stay buffered for the next.
-4. Global middleware runs, then the router finds the endpoint by path and method: `404` when
-   the path is unknown, `405` when the path exists without that method.
-5. The filters of the endpoint's groups run from the outermost inwards, then the endpoint's own
-   filters, then the controller. Its `IActionResult` fills the `HttpResponse`, which is written
-   to the socket.
-6. The connection is reused until the client asks to close, `Server:KeepAliveMax` requests
-   have been served, or it sits idle for `Server:KeepAliveTimeout` between requests.
+1. One of `Server:AcceptLoops` accept loops takes the connection from the OS queue of
+   `Server:ListenBacklog`. Above `Server:MaxConnections` open connections it answers `503` and
+   closes the connection.
+2. The connection gets its own task, which reads requests from it one after another and opens
+   a fresh `DIScope` for each.
+3. The head is parsed strictly by RFC 9112 under the head and body limits, which yield `400`,
+   `408`, `413` or `431`. Bytes read past the end of one request stay buffered for the next.
+4. The request takes one of `Server:MaxConcurrentRequests` slots. When all are busy it waits in
+   a queue of up to `Server:MaxQueuedRequests` for at most `Server:RequestQueueTimeoutSeconds`;
+   beyond that it is answered `503` with `Connection: close`.
+5. Global middleware runs, then the router finds the endpoint by path and method: `404` when
+   the path is unknown, `405` with `Allow` when the path exists without that method.
+6. The filters of the endpoint's groups run from the outermost inwards, then the endpoint's own
+   filters, then the handler. The slot is released once the handler has returned its
+   `HttpResponse`, before the response is written to the socket.
+7. The connection is reused until the client asks to close, `Server:KeepAliveMax` requests
+   have been served, or it sits idle for `Server:KeepAliveTimeoutSeconds` between requests.
 
-Because a worker owns a connection rather than a request, `Server:MaxConcurrentRequests` is
-in practice the number of simultaneous *clients*. Connections beyond it wait in the queue and
-are not read at all, so plan capacity by connections, not by request rate.
+An idle keep-alive connection holds no slot: it only waits for bytes. `MaxConcurrentRequests`
+limits the work that is running, `MaxConnections` limits memory and sockets.
 
 ---
 
@@ -187,11 +201,11 @@ throw `InvalidOperationException` at resolution time.
 
 Lifetimes of framework parts are fixed by the framework, not configured:
 
-| Part | Lifetime | Registered by |
-|---|---|---|
-| Controller | transient, one per request | the framework, from the routes |
-| Filter | singleton | the framework, from `AddFilter<T>()` |
-| Middleware | singleton | `RegisterMiddleware<T>()` |
+| Part          | Lifetime                   | Registered by                        |
+|---------------|----------------------------|--------------------------------------|
+| Handler class | transient, one per request | the framework, from the routes       |
+| Filter        | singleton                  | the framework, from `AddFilter<T>()` |
+| Middleware    | singleton                  | `RegisterMiddleware<T>()`            |
 
 Middleware and filters are shared by parallel requests, so they must be thread-safe and may
 take only singletons in their constructor. Per-request services are taken inside
@@ -210,39 +224,39 @@ resolution time.
 
 ---
 
-## Routes and controllers
+## Routes and handlers
 
-Routes are declared in one place, the route tree on `builder.Routes`. It is the only way to
-declare a route. A path is built from groups only; a handler is attached to the end of its
-group and returns that group, so calls chain:
+Routes are declared in one place, the route tree on `builder.Routes`. Every handler has the
+same signature:
 
 ```csharp
+delegate Task<HttpResponse> RequestDelegate(HttpRequest request, HttpContext context);
+```
+
+A handler is either a delegate, or a method of a class that the framework creates from DI for
+each request. `h => h.Get` picks the method, and the compiler checks its signature:
+
+```csharp
+builder.Routes.AddGet("/health", (request, context) =>
+    Task.FromResult(context.Response().Text("ok")));
+
 var users = builder.Routes
     .AddGroup("/users")
     .AddFilter<AuthFilter>()
-    .AddGetHandler<UsersController>()
-    .AddPostHandler<UsersController>(endpoint => endpoint.AddFilter<AdminFilter>());
-
-users.AddGroup("{id}")
-    .AddGetHandler<UserController>()
-    .AddDeleteHandler<UserController>(endpoint => endpoint.AddFilter<AdminFilter>());
+    .AddGet<UsersHandler>("/", h => h.List)
+    .AddPost<UsersHandler>("/", h => h.Create, endpoint => endpoint.AddFilter<AdminFilter>())
+    .AddGet<UsersHandler>("/{id}", h => h.Get)
+    .AddDelete<UsersHandler>("/{id}", h => h.Delete, endpoint => endpoint.AddFilter<AdminFilter>());
 ```
 
-A controller is any class implementing handler interfaces. `AddGetHandler<C>()` requires
-`C : IGetHandler`, so the compiler checks the connection between a route and a method:
-
-```csharp
-public class UserController : IGetHandler, IDeleteHandler
-{
-    public Task<IActionResult> Get(HttpContext context) { ... }
-    public Task<IActionResult> Delete(HttpContext context) { ... }
-}
-```
+`AddGet`, `AddPost`, `AddPut`, `AddPatch` and `AddDelete` return the group, so calls chain;
+`AddGroup` returns the new group.
 
 - A group filter applies to every endpoint inside the group, nested groups included. Filters
   run from the outer group to the inner one, then the endpoint's own filters; within a level —
-  in the order they were added. A filter added to a group after its handlers still applies.
+  in the order they were added. A filter added to a group after its endpoints still applies.
 - A group can be built separately and attached with `AddGroup(group)`; a group has one parent.
+- A `HEAD` request is served by the `GET` endpoint of the same path, and the body is not sent.
 - Matching walks the path segment by segment. A literal segment wins over a parameter, and a
   dead-end branch is backtracked, so `/users/me` wins over `/users/{id}` while
   `POST /users/me` still reaches `POST /users/{id}` when `/users/me` has only `GET`. Segments
@@ -250,42 +264,57 @@ public class UserController : IGetHandler, IDeleteHandler
   percent-decoded after the split, so `%2F` cannot smuggle in a separator.
 - `Build()` fails on a duplicate method and path, a filter applied twice on the way to an
   endpoint, two different parameter names in the same position, a mixed segment like `v{id}`,
-  and a group attached to a second parent. A second handler of the same method on one group
-  fails immediately.
+  and a group attached to a second parent. The route tree cannot be changed after `Build()`.
 
 ---
 
 ## Reading request data
 
-A controller reads everything from `HttpContext`. Nothing is bound to method parameters and
-nothing throws — `null` means the value is missing or cannot be parsed, and the controller
-decides how to answer:
+A handler reads everything from `HttpRequest`. Nothing is bound to method parameters:
 
 ```csharp
-var id = context.GetFromRoute<int>("id");            // int?
-if (id is null)
-    return new BadRequest("id must be a number");
+var id = request.GetFromRoute<int>("id");            // int?, 400 when not a number
+var take = request.GetFromQuery<int>("take") ?? 10;  // int?, null when missing
+var key = request.GetFromHeaders("X-Api-Key");       // string?
 
-var take = context.GetFromQuery<int>("take") ?? 10;  // int?
-var key = context.GetFromHeader("X-Api-Key");        // string?
-
-var input = await context.ReadFromBodyAsync<NoteInput>();   // NoteInput?
+var input = await request.ReadJsonAsync<NoteInput>(); // NoteInput?, 400 when not valid JSON
 if (input is null)
-    return new BadRequest("Body must be a note");
+    return context.Response().Status(StatusCodes.BadRequest).Text("Body must be a note");
 
 var service = context.GetService<MyScopedService>();
 ```
 
-- `GetFromRoute`, `GetFromQuery` and `GetFromHeader` return `string?` without a type argument
-  and `T?` for any `IParsable<T>` value type. Values are parsed with the invariant culture.
-- `GetFromQuery<int>("take") ?? 10` treats `?take=many` as missing. When garbage has to be
-  told apart from absence, check `context.Request.Query.ContainsKey("take")`.
-- A body is parsed as JSON only when `Content-Type` is `application/json` or ends with
-  `+json`. A malformed body, or one that is not a JSON object, is answered `400` while the
-  request is read, before any middleware. Any other body is not parsed and
-  `ReadFromBodyAsync` returns `null`.
-- JSON property names are case-insensitive, both when reading bodies and in responses.
-- The raw dictionaries `context.Request.Route`, `.Query` and `.Headers` stay available.
+- `GetFromRoute` and `GetFromQuery` return `string?` without a type argument and `T?` for any
+  `IParsable<T>` value type. `null` means the value is missing. A value that is present but
+  does not parse throws `RequestValueException`, answered `400`. Values are parsed with the
+  invariant culture.
+- `ReadJsonAsync<T>()` reads the body with the options from `builder.Json(...)`
+  (`JsonSerializerDefaults.Web` by default: case-insensitive names, camelCase output). A body
+  that is not valid JSON throws `RequestJsonException`, answered `400`.
+- `GetBodyStream()` gives the body as a stream that can be read once. `BufferBodyAsync()` reads
+  it into memory, after which it can be read any number of times.
+- A body that is too large or too slow fails the read with `413` or `408` and closes the
+  connection. A body the handler did not read is drained before the next request.
+
+---
+
+## Building a response
+
+`context.Response()` returns a builder. The status and headers come first, then exactly one
+method that sets the body and returns the `HttpResponse`:
+
+```csharp
+return context.Response().Json(note);
+return context.Response().Status(StatusCodes.Created).Json(note);
+return context.Response().Status(StatusCodes.NoContent).Empty();
+return context.Response().AddHeader("Cache-Control", "no-store").Text("ok");
+return context.Response().Bytes(html, "text/html; charset=utf-8");
+return context.Response().Stream(async (stream, ct) => await file.CopyToAsync(stream, ct), "application/pdf");
+```
+
+The status defaults to `200`. `Content-Length`, `Transfer-Encoding` and `Keep-Alive` are set by
+the server and cannot be added; `Connection` accepts only `close`, which closes the connection
+after the response. A stream without a length is sent chunked to HTTP/1.1 clients.
 
 ---
 
@@ -296,26 +325,42 @@ Middleware and filters implement the same interface:
 ```csharp
 public class LoggingMiddleware : IMiddleware
 {
-    public async Task InvokeAsync(HttpContext context, RequestDelegate next)
+    public async Task<HttpResponse> InvokeAsync(HttpRequest request, HttpContext context, RequestDelegate next)
     {
-        Console.WriteLine($"→ {context.Request.Method} {context.Request.Url}");
-        await next(context);
+        var response = await next(request, context);
+        Console.WriteLine($"{request.Method} {request.Path} -> {response.StatusCode}");
+        return response;
     }
 }
 ```
 
 `RegisterMiddleware<T>()` runs it for every request, before routing, in registration order.
 `AddFilter<T>()` on a group or an endpoint runs it only for that part of the route tree.
-Code after `await next(context)` runs once the response is filled. A middleware or filter that
-does not call `next` ends the request there — set `context.Response` with a result first:
+A middleware or filter that returns a response without calling `next` ends the request there:
 
 ```csharp
-new BaseResult(401, "Missing X-Api-Key").ExecuteResult(context);
-return Task.CompletedTask;
+if (request.GetFromHeaders("X-Api-Key") != _apiKey)
+    return Task.FromResult(context.Response().Status(StatusCodes.Unauthorized).Text("Missing X-Api-Key"));
+return next(request, context);
 ```
 
-A `400`, `408` or `413` produced while reading the request happens before the pipeline, so
-middleware does not see those responses.
+---
+
+## Errors
+
+An exception thrown by a handler passes back through the filters and middleware, so they can
+catch it, log it or turn it into another response. An exception nobody caught is answered by
+the framework:
+
+| Exception                                         | Response | Connection |
+|---------------------------------------------------|----------|------------|
+| `RequestValueException`, `RequestJsonException`   | `400`    | kept       |
+| body too large or malformed                       | `413`, `400` | closed |
+| body too slow                                     | `408`    | closed     |
+| anything else                                     | `500`, logged | kept  |
+
+Errors in the request head (`400`, `408`, `431`, and `413` for a declared `Content-Length`
+over the limit) are answered before the pipeline, so middleware does not see them.
 
 ---
 
@@ -341,55 +386,31 @@ var key = configuration["Example:ApiKey"];
 
 ### Framework keys
 
-| Key | Default | Meaning |
-|---|---|---|
-| `Server:Port` | `5000` | listening port; `0` lets the OS choose |
-| `Server:MaxConcurrentRequests` | `256` | worker count, and thus simultaneous connections |
-| `Server:MaxQueuedConnections` | `1024` | queue capacity; full ⇒ `503` |
-| `Server:MaxHeadBytes` | `16384` | request head limit ⇒ `413` |
-| `Server:MaxBodyBytes` | `8388608` | request body limit ⇒ `413` |
-| `Server:ReceiveBufferSize` | `8192` | socket read buffer, one per connection |
-| `Server:ReadTimeoutSeconds` | `15` | time to send a complete request ⇒ `408` |
-| `Server:KeepAliveMax` | `1000` | requests served on one connection before it is closed |
-| `Server:KeepAliveTimeout` | `5` | seconds a connection may sit idle between requests |
-| `WebRoot:Path` | `./WebRoot` | static file root; unused while static files are disconnected |
+| Key                                 | Default   | Meaning                                                                  |
+|-------------------------------------|-----------|--------------------------------------------------------------------------|
+| `Server:Port`                       | `5000`    | listening port; `0` lets the OS choose                                   |
+| `Server:ListenBacklog`              | `512`     | OS queue of connections not yet accepted; the OS may cap it              |
+| `Server:AcceptLoops`                | `1`       | parallel accept loops, at least `1`                                      |
+| `Server:MaxConnections`             | `10000`   | open connections; above it a new connection gets `503`                   |
+| `Server:MaxConcurrentRequests`      | `256`     | requests being handled at once                                           |
+| `Server:MaxQueuedRequests`          | `1024`    | requests waiting for a slot; full ⇒ `503`                                |
+| `Server:RequestQueueTimeoutSeconds` | `2`       | how long a request waits for a slot ⇒ `503`; handling itself is not timed |
+| `Server:MaxHeadBytes`               | `32768`   | request head limit ⇒ `431`                                               |
+| `Server:MaxBodyBytes`               | `1048576` | request body limit ⇒ `413`                                               |
+| `Server:HeadersTimeoutSeconds`      | `10`      | time to send the head once its first byte arrived ⇒ `408`                |
+| `Server:BodyGracePeriodSeconds`     | `5`       | time a body may take before the minimum rate applies                     |
+| `Server:MinBodyBytesPerSecond`      | `240`     | minimum body upload rate ⇒ `408`                                         |
+| `Server:KeepAliveMax`               | `1000`    | requests served on one connection before it is closed                    |
+| `Server:KeepAliveTimeoutSeconds`    | `60`      | seconds a connection may sit idle before the next request                |
 
-`KeepAliveTimeout` limits the pause *between* requests, not the life of a connection: a client
-that keeps sending keeps its worker for up to `KeepAliveMax` requests. It is deliberately
-short, because an idle connection holds a worker. Behind a reverse proxy that keeps an
-upstream pool it has to be raised above the proxy's own idle timeout — otherwise the server
+`KeepAliveTimeoutSeconds` limits the pause *between* requests, not the life of a connection.
+An idle connection costs only memory, so the timeout can be long. Behind a reverse proxy that
+keeps an upstream pool it has to stay above the proxy's own idle timeout — otherwise the server
 closes a pooled connection under the proxy and the client sees `502`.
 
----
-
-## Action results
-
-| Class | Status | Body |
-|---|---|---|
-| `Ok` | 200 | optional JSON |
-| `BadRequest` | 400 | optional JSON |
-| `NotFound` | 404 | optional JSON |
-| `InternalError` | 500 | optional JSON |
-| `HtmlView` | 200 | HTML |
-| `Media` | 200 | text or bytes with an explicit content type |
-| `BaseResult` | any | optional JSON |
-
-```csharp
-return new Ok(new { id = 1 });
-return new BaseResult(201, created);
-return new HtmlView("<h1>Hello</h1>");
-return new Media(bytes, "image/png");
-```
-
-A new result inherits from `BaseResult` for a JSON body, or from `ActionResult` to fill the
-response itself.
-
----
-
-## Static files
-
-Not served at the moment: the static file handler is being rewritten as a middleware. Its
-path check is kept and covered by tests — a path leading outside the web root is rejected.
+The body limit matters for memory: `ReadJsonAsync` and `BufferBodyAsync` hold the whole body,
+so the worst case is `MaxBodyBytes × MaxConcurrentRequests`. Raise it for an endpoint that
+reads the body as a stream through `GetBodyStream()`, not for JSON.
 
 ---
 

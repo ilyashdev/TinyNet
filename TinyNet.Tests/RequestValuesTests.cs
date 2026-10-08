@@ -1,5 +1,6 @@
-using System.Text.Json.Nodes;
-using TinyNet.DI;
+using System.Text;
+using System.Text.Json;
+using TinyNet.Exceptions;
 using TinyNet.Http;
 
 namespace TinyNet.Tests;
@@ -8,58 +9,60 @@ public class RequestValuesTests
 {
     public record Person(string Name);
 
-    private static HttpContext Context(JsonObject? body = null)
+    private static HttpRequest Request(string body = "")
     {
-        var query = new Dictionary<string, string>
-        {
-            ["term"] = "hello",
-            ["count"] = "5",
-            ["broken"] = "five"
-        };
-        return new HttpContext(new DIContainer().CreateScope(), new HttpRequest("GET", "/", new(), query, body));
+        var settings = new HttpSettings(new JsonSerializerOptions(JsonSerializerDefaults.Web), 1024);
+        var query = new Dictionary<string, string> { ["count"] = "5", ["broken"] = "five" };
+        var stream = new MemoryStream(Encoding.UTF8.GetBytes(body));
+        return new HttpRequest("POST", "/", "/", "HTTP/1.1", settings, new HttpHeaders(), query, stream,
+            body.Length > 0, CancellationToken.None);
     }
 
     [Fact]
-    public void GetFromQuery_String_ReturnsRawValue()
+    public void GetFromQuery_MissingValue_ReturnsNull()
     {
-        Assert.Equal("hello", Context().GetFromQuery("term"));
+        Assert.Null(Request().GetFromQuery<int>("missing"));
     }
 
     [Fact]
-    public void GetFromQuery_Number_IsParsed()
+    public void GetFromQuery_UnparsableValue_Throws400()
     {
-        Assert.Equal(5, Context().GetFromQuery<int>("count"));
-    }
+        var error = Assert.Throws<RequestValueException>(() => Request().GetFromQuery<int>("broken"));
 
-    [Theory]
-    [InlineData("missing")]
-    [InlineData("broken")]
-    public void GetFromQuery_MissingOrUnparsable_ReturnsNull(string name)
-    {
-        Assert.Null(Context().GetFromQuery<int>(name));
+        Assert.Equal(400, error.StatusCode);
+        Assert.Equal(5, Request().GetFromQuery<int>("count"));
     }
 
     [Fact]
-    public async Task ReadFromBodyAsync_IgnoresPropertyNameCase()
+    public async Task ReadJsonAsync_IgnoresPropertyNameCase()
     {
-        var context = Context(new JsonObject { ["name"] = "Bob" });
-
-        var person = await context.ReadFromBodyAsync<Person>();
+        var person = await Request("""{"NAME":"Bob"}""").ReadJsonAsync<Person>();
 
         Assert.Equal("Bob", person?.Name);
     }
 
-    [Fact]
-    public async Task ReadFromBodyAsync_WithoutBody_ReturnsNull()
+    [Theory]
+    [InlineData("{broken")]
+    [InlineData("")]
+    [InlineData("""{"name":[1,2]}""")]
+    public async Task ReadJsonAsync_BodyThatIsNotThePerson_Throws400(string body)
     {
-        Assert.Null(await Context().ReadFromBodyAsync<Person>());
+        var error = await Assert.ThrowsAsync<RequestJsonException>(() => Request(body).ReadJsonAsync<Person>().AsTask());
+
+        Assert.Equal(400, error.StatusCode);
     }
 
     [Fact]
-    public async Task ReadFromBodyAsync_BodyOfWrongShape_ReturnsNull()
+    public async Task Body_IsReadOnceUnlessBuffered()
     {
-        var context = Context(new JsonObject { ["Name"] = new JsonArray(1, 2) });
+        var once = Request("""{"name":"Bob"}""");
+        await once.ReadJsonAsync<Person>();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => once.ReadJsonAsync<Person>().AsTask());
 
-        Assert.Null(await context.ReadFromBodyAsync<Person>());
+        var buffered = Request("""{"name":"Bob"}""");
+        await buffered.BufferBodyAsync();
+        await buffered.ReadJsonAsync<Person>();
+
+        Assert.Equal("Bob", (await buffered.ReadJsonAsync<Person>())?.Name);
     }
 }

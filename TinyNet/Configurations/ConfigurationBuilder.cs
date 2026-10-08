@@ -5,7 +5,7 @@ namespace TinyNet.Configurations;
 public class ConfigurationBuilder
 {
     private readonly List<IConfigurationProvider> _providers = new();
-    
+
     private readonly MemoryConfigurationProvider _defaults = new();
 
     private bool _built;

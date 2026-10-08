@@ -13,7 +13,7 @@
     const button = document.getElementById("myButton");
     const input = document.getElementById("myInput");
 
-    button.addEventListener("click", function() {
+    button.addEventListener("click", function () {
         const now = new Date();
         const dateString = now.toLocaleDateString() + " " + now.toLocaleTimeString();
         input.value = dateString;

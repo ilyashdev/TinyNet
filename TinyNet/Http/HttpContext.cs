@@ -2,18 +2,18 @@ using TinyNet.DI;
 
 namespace TinyNet.Http;
 
-public class HttpContext
+public sealed class HttpContext
 {
-    public HttpRequest Request { get; }
-    public HttpResponse Response { get; }
-    private DIScope _scope { get; }
+    private readonly DIScope _scope;
+    private readonly HttpSettings _settings;
 
-    public HttpContext(HttpRequest request, HttpResponse response, DIScope scope)
+    internal HttpContext(DIScope scope, HttpSettings settings)
     {
-        Request = request;
-        Response = response;
         _scope = scope;
+        _settings = settings;
     }
+
+    public ResponseBuilder Response() => new(_settings);
+
     public T GetService<T>() => _scope.GetService<T>();
-    
 }

@@ -7,24 +7,31 @@ public enum RouteStatus
     NotFound
 }
 
-public readonly record struct RouteMatch(RouteStatus Status, Endpoint? Endpoint, Dictionary<string, string> Values);
+public readonly record struct RouteMatch(
+    RouteStatus Status,
+    Endpoint? Endpoint,
+    Dictionary<string, string> Values,
+    IReadOnlyCollection<string> AllowedMethods);
 
 public class UrlRouter
 {
     private const int MaxSegments = 64;
 
     private readonly Node rootNode = new(string.Empty);
+
     private class Node
     {
         public Node(string Name)
         {
             this.Name = Name;
         }
+
         public readonly string Name;
         public readonly Dictionary<string, Endpoint> Endpoints = new(StringComparer.Ordinal);
         public Node? ParamSubNode = null;
         public Dictionary<string, Node> Static { get; } = new(StringComparer.OrdinalIgnoreCase);
     }
+
     public UrlRouter(IEnumerable<Endpoint> endpoints)
     {
         foreach (var endpoint in endpoints)
@@ -35,35 +42,41 @@ public class UrlRouter
     {
         var segments = SplitUrl(url);
         if (segments is null)
-            return new RouteMatch(RouteStatus.NotFound, null, new());
+            return new RouteMatch(RouteStatus.NotFound, null, new(), []);
         var values = new List<KeyValuePair<string, string>>();
-        var pathFound = false;
-        var node = Match(rootNode, segments, 0, method, values, ref pathFound);
-        if (node is null)
-            return new RouteMatch(pathFound ? RouteStatus.MethodNotAllowed : RouteStatus.NotFound, null, new());
-        return new RouteMatch(RouteStatus.Found, node.Endpoints[method], values.ToDictionary());
+        Node? pathNode = null;
+        var node = Match(rootNode, segments, 0, method, values, ref pathNode);
+        if (node is not null)
+            return new RouteMatch(RouteStatus.Found, node.Endpoints[method],
+                values.ToDictionary(StringComparer.OrdinalIgnoreCase), []);
+        if (pathNode is not null)
+            return new RouteMatch(RouteStatus.MethodNotAllowed, null, new(), pathNode.Endpoints.Keys);
+        return new RouteMatch(RouteStatus.NotFound, null, new(), []);
     }
 
     private static Node? Match(
-        Node node, string[] segments, int index, string method, List<KeyValuePair<string, string>> values, ref bool pathFound)
+        Node node, string[] segments, int index, string method, List<KeyValuePair<string, string>> values,
+        ref Node? pathNode)
     {
         if (index == segments.Length)
         {
             if (node.Endpoints.Count == 0)
                 return null;
-            pathFound = true;
+            pathNode ??= node;
             return node.Endpoints.ContainsKey(method) ? node : null;
         }
+
         if (node.Static.TryGetValue(segments[index], out var staticNode))
         {
-            var staticMatch = Match(staticNode, segments, index + 1, method, values, ref pathFound);
+            var staticMatch = Match(staticNode, segments, index + 1, method, values, ref pathNode);
             if (staticMatch is not null)
                 return staticMatch;
         }
+
         if (node.ParamSubNode is null)
             return null;
         values.Add(new KeyValuePair<string, string>(node.ParamSubNode.Name, segments[index]));
-        var paramMatch = Match(node.ParamSubNode, segments, index + 1, method, values, ref pathFound);
+        var paramMatch = Match(node.ParamSubNode, segments, index + 1, method, values, ref pathNode);
         if (paramMatch is not null)
             return paramMatch;
         values.RemoveAt(values.Count - 1);
@@ -82,6 +95,7 @@ public class UrlRouter
                 return null;
             segments[i] = segment;
         }
+
         return segments;
     }
 
@@ -123,6 +137,7 @@ public class UrlRouter
                 node = newNode;
             }
         }
+
         if (!node.Endpoints.TryAdd(endpoint.Method, endpoint))
             throw new InvalidOperationException($"Duplicate route: {endpoint}");
     }

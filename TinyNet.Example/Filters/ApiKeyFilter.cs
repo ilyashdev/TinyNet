@@ -1,4 +1,3 @@
-using TinyNet.ActionResult;
 using TinyNet.Configurations;
 using TinyNet.Http;
 using TinyNet.Middlewares;
@@ -19,14 +18,15 @@ public class ApiKeyFilter : IMiddleware
                   ?? throw new InvalidOperationException("Configuration key 'Example:ApiKey' is not set");
     }
 
-    public Task InvokeAsync(HttpContext context, RequestDelegate next)
+    public Task<HttpResponse> InvokeAsync(HttpRequest request, HttpContext context, RequestDelegate next)
     {
-        if (context.GetFromHeader("X-Api-Key") == _apiKey)
-            return next(context);
+        if (request.GetFromHeaders("X-Api-Key") == _apiKey)
+            return next(request, context);
 
-        // EN: Not calling next() short-circuits the request: the controller never runs.
-        // RU: Без вызова next() запрос обрывается здесь, контроллер не выполняется.
-        new BaseResult(401, "Missing or wrong X-Api-Key").ExecuteResult(context);
-        return Task.CompletedTask;
+        // EN: Returning a response without calling next() short-circuits the request: the handler never runs.
+        // RU: Если вернуть ответ без вызова next(), запрос обрывается здесь, обработчик не выполняется.
+        return Task.FromResult(context.Response()
+            .Status(StatusCodes.Unauthorized)
+            .Text("Missing or wrong X-Api-Key"));
     }
 }

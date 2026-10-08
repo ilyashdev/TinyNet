@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Globalization;
 using TinyNet.Example.Services;
 using TinyNet.Http;
 using TinyNet.Middlewares;
@@ -12,19 +11,30 @@ namespace TinyNet.Example.Middlewares;
 //     Сервисы запроса берутся через context.GetService внутри InvokeAsync, а не через конструктор.
 public class RequestIdMiddleware : IMiddleware
 {
-    public async Task InvokeAsync(HttpContext context, RequestDelegate next)
+    public async Task<HttpResponse> InvokeAsync(HttpRequest request, HttpContext context, RequestDelegate next)
     {
         var requestId = context.GetService<RequestId>();
         var started = Stopwatch.GetTimestamp();
 
-        // EN: Everything after next() runs once routing, filters and the controller have produced context.Response.
-        // RU: Всё после next() выполняется, когда роутинг, фильтры и контроллер уже заполнили context.Response.
-        await next(context);
-
-        if (context.Response is null)
-            return;
-        context.Response.Headers["X-Request-Id"] = requestId.Value;
-        context.Response.Headers["X-Elapsed-Ms"] =
-            Stopwatch.GetElapsedTime(started).TotalMilliseconds.ToString("F2", CultureInfo.InvariantCulture);
+        // EN: next() returns the response produced by routing, filters and the handler.
+        //     An exception thrown further down (a malformed body, a non-numeric {id}) passes through here.
+        // RU: next() возвращает ответ, созданный роутингом, фильтрами и обработчиком.
+        //     Исключение, брошенное глубже (битое тело, нечисловой {id}), проходит через это место.
+        try
+        {
+            var response = await next(request, context);
+            Log(requestId, request, response.StatusCode.ToString(), started);
+            return response;
+        }
+        catch (Exception e)
+        {
+            Log(requestId, request, e.GetType().Name, started);
+            throw;
+        }
     }
+
+    private static void Log(RequestId requestId, HttpRequest request, string outcome, long started)
+        => Console.WriteLine(
+            $"[{requestId.Value}] {request.Method} {request.Path} -> {outcome} " +
+            $"in {Stopwatch.GetElapsedTime(started).TotalMilliseconds:F2} ms");
 }

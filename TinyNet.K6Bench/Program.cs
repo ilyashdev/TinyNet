@@ -6,13 +6,13 @@ builder
     .AddJsonConfig("config.json")
     .AddEnvironmentVariables("TINYNET_");
 
-builder.Routes
-    .AddGetHandler<PingController>();
+builder.Routes.AddGet("/", LoadHandlers.Ping);
 
-var load = builder.Routes.AddGroup("/load");
-load.AddGroup("/cpu").AddGetHandler<CpuLoadController>();
-load.AddGroup("/io").AddGetHandler<IoLoadController>();
-load.AddGroup("/block").AddGetHandler<BlockLoadController>();
+builder.Routes
+    .AddGroup("/load")
+    .AddGet("/cpu", LoadHandlers.Cpu)
+    .AddGet("/io", LoadHandlers.Io)
+    .AddGet("/block", LoadHandlers.Block);
 
 var app = builder.Build();
 await app.Run();

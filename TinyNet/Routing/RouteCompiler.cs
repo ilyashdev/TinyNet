@@ -24,14 +24,15 @@ internal static class RouteCompiler
         foreach (var route in group.Endpoints)
         {
             route.Freeze();
-            endpoints.Add(new Endpoint(route, path, filters.Concat(route.Filters).ToList()));
+            endpoints.Add(new Endpoint(route, Join(path, route.Path), filters.Concat(route.Filters).ToList()));
         }
+
         foreach (var child in group.Groups)
             Walk(child, path, filters, endpoints);
     }
 
     private static IEnumerable<Type> Controllers(GroupRoute group)
-        => group.Endpoints.Select(e => e.Controller).Concat(group.Groups.SelectMany(Controllers));
+        => group.Endpoints.Select(e => e.Controller).OfType<Type>().Concat(group.Groups.SelectMany(Controllers));
 
     private static string Join(string prefix, string path)
         => "/" + string.Join('/', $"{prefix}/{path}".Split('/', StringSplitOptions.RemoveEmptyEntries));

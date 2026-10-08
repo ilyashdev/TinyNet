@@ -1,7 +1,7 @@
 ﻿namespace TinyNet.DI;
 
 public class DIScope : IAsyncDisposable
-{ 
+{
     private DIContainer _container;
     private readonly Dictionary<Type, object> _scopedInstances = new();
     private readonly Stack<object> _disposables = new();
@@ -14,7 +14,8 @@ public class DIScope : IAsyncDisposable
     }
 
     public T GetService<T>()
-    => (T)GetService(typeof(T));
+        => (T)GetService(typeof(T));
+
     public object GetService(Type type)
     {
         lock (_lock)
@@ -30,11 +31,11 @@ public class DIScope : IAsyncDisposable
         lock (_lock)
         {
             if (_scopedInstances.TryAdd(objType, instance))
-                if(instance is IDisposable || instance is IAsyncDisposable)
+                if (instance is IDisposable || instance is IAsyncDisposable)
                     _disposables.Push(instance);
         }
     }
-    
+
     internal bool TryGetValue(Type objType, out object instance)
     {
         lock (_lock)
@@ -42,7 +43,7 @@ public class DIScope : IAsyncDisposable
             return _scopedInstances.TryGetValue(objType, out instance);
         }
     }
-    
+
 
     public async ValueTask DisposeAsync()
     {
@@ -57,12 +58,13 @@ public class DIScope : IAsyncDisposable
                 else if (disposable is IDisposable syncDisposable)
                     syncDisposable.Dispose();
             }
-            catch(Exception ex)
+            catch (Exception ex)
             {
                 errors.Add(ex);
             }
         }
-        if(errors.Count > 0)
+
+        if (errors.Count > 0)
             throw new AggregateException(errors);
     }
 }

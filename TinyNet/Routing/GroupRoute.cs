@@ -1,5 +1,3 @@
-using TinyNet.ActionResult;
-using TinyNet.Controllers;
 using TinyNet.Http;
 using TinyNet.Middlewares;
 
@@ -39,7 +37,8 @@ public sealed class GroupRoute
     {
         EnsureNotFrozen();
         if (group._parent is not null)
-            throw new InvalidOperationException($"Group {group.BasePath} already belongs to group {group._parent.BasePath}");
+            throw new InvalidOperationException(
+                $"Group {group.BasePath} already belongs to group {group._parent.BasePath}");
         for (var ancestor = this; ancestor is not null; ancestor = ancestor._parent)
             if (ancestor == group)
                 throw new InvalidOperationException($"Group {group.BasePath} cannot contain itself");
@@ -48,33 +47,50 @@ public sealed class GroupRoute
         return group;
     }
 
-    public GroupRoute AddGetHandler<T>(Action<EndpointRoute>? setup = null) where T : class, IGetHandler
-        => AddEndpoint<T>("GET", (controller, context) => controller.Get(context), setup);
+    public GroupRoute AddGet(string path, RequestDelegate handler, Action<EndpointRoute>? setup = null)
+        => AddEndpoint(nameof(HttpMethods.GET), path, null, handler, setup);
+    public GroupRoute AddGet<T>(string path, Func<T, RequestDelegate> handler, Action<EndpointRoute>? setup = null)
+        where T : class
+        => AddEndpoint(nameof(HttpMethods.GET), path, handler, setup);
 
-    public GroupRoute AddPostHandler<T>(Action<EndpointRoute>? setup = null) where T : class, IPostHandler
-        => AddEndpoint<T>("POST", (controller, context) => controller.Post(context), setup);
+    public GroupRoute AddPost(string path, RequestDelegate handler, Action<EndpointRoute>? setup = null)
+        => AddEndpoint(nameof(HttpMethods.POST), path, null, handler, setup);
 
-    public GroupRoute AddPutHandler<T>(Action<EndpointRoute>? setup = null) where T : class, IPutHandler
-        => AddEndpoint<T>("PUT", (controller, context) => controller.Put(context), setup);
+    public GroupRoute AddPost<T>(string path, Func<T, RequestDelegate> handler, Action<EndpointRoute>? setup = null)
+        where T : class
+        => AddEndpoint(nameof(HttpMethods.POST), path, handler, setup);
 
-    public GroupRoute AddPatchHandler<T>(Action<EndpointRoute>? setup = null) where T : class, IPatchHandler
-        => AddEndpoint<T>("PATCH", (controller, context) => controller.Patch(context), setup);
+    public GroupRoute AddPut(string path, RequestDelegate handler, Action<EndpointRoute>? setup = null)
+        => AddEndpoint(nameof(HttpMethods.PUT), path, null, handler, setup);
 
-    public GroupRoute AddDeleteHandler<T>(Action<EndpointRoute>? setup = null) where T : class, IDeleteHandler
-        => AddEndpoint<T>("DELETE", (controller, context) => controller.Delete(context), setup);
+    public GroupRoute AddPut<T>(string path, Func<T, RequestDelegate> handler, Action<EndpointRoute>? setup = null)
+        where T : class
+        => AddEndpoint(nameof(HttpMethods.PUT), path, handler, setup);
+
+    public GroupRoute AddPatch(string path, RequestDelegate handler, Action<EndpointRoute>? setup = null)
+        => AddEndpoint(nameof(HttpMethods.PATCH), path, null, handler, setup);
+
+    public GroupRoute AddPatch<T>(string path, Func<T, RequestDelegate> handler, Action<EndpointRoute>? setup = null)
+        where T : class
+        => AddEndpoint(nameof(HttpMethods.PATCH), path, handler, setup);
+
+    public GroupRoute AddDelete(string path, RequestDelegate handler, Action<EndpointRoute>? setup = null)
+        => AddEndpoint(nameof(HttpMethods.DELETE), path, null, handler, setup);
+
+    public GroupRoute AddDelete<T>(string path, Func<T, RequestDelegate> handler, Action<EndpointRoute>? setup = null)
+        where T : class
+        => AddEndpoint(nameof(HttpMethods.DELETE), path, handler, setup);
 
     private GroupRoute AddEndpoint<T>(
-        string method, Func<T, HttpContext, Task<IActionResult>> action, Action<EndpointRoute>? setup) where T : class
+        string method, string path, Func<T, RequestDelegate> handler, Action<EndpointRoute>? setup) where T : class
+        => AddEndpoint(method, path, typeof(T),
+            (request, context) => handler(context.GetService<T>())(request, context), setup);
+
+    private GroupRoute AddEndpoint(
+        string method, string path, Type? controller, RequestDelegate handler, Action<EndpointRoute>? setup)
     {
         EnsureNotFrozen();
-        if (_endpoints.Any(e => e.Method == method))
-            throw new InvalidOperationException($"Group {BasePath} already has a {method} handler");
-        var endpoint = new EndpointRoute(method, typeof(T), async context =>
-        {
-            var controller = context.GetService<T>();
-            var result = await action(controller, context);
-            result.ExecuteResult(context);
-        });
+        var endpoint = new EndpointRoute(method, path, controller, handler);
         setup?.Invoke(endpoint);
         _endpoints.Add(endpoint);
         return this;

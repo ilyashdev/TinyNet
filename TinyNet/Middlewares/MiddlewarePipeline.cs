@@ -31,8 +31,8 @@ public class MiddlewarePipeline
         _middlewareChains = Compose(_middlewares.Select(t => (IMiddleware)_container.GetSingleton(t)).ToList(), final);
     }
 
-    public Task InvokeAsync(HttpContext context)
-        => (_middlewareChains ?? throw new InvalidOperationException("Pipeline is not built"))(context);
+    public Task<HttpResponse> InvokeAsync(HttpRequest request, HttpContext context)
+        => (_middlewareChains ?? throw new InvalidOperationException("Pipeline is not built"))(request, context);
 
     internal static RequestDelegate Compose(IReadOnlyList<IMiddleware> middlewares, RequestDelegate final)
     {
@@ -41,8 +41,9 @@ public class MiddlewarePipeline
         {
             var middleware = middlewares[i];
             var inner = next;
-            next = ctx => middleware.InvokeAsync(ctx, inner);
+            next = (request, ctx) => middleware.InvokeAsync(request, ctx, inner);
         }
+
         return next;
     }
 

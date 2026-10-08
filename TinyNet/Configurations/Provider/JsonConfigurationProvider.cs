@@ -41,21 +41,22 @@ public class JsonConfigurationProvider : IConfigurationProvider
         }
         catch (JsonException ex)
         {
-            throw new InvalidOperationException($"Configuration file '{_filePath}' is not valid JSON: {ex.Message}", ex);
+            throw new InvalidOperationException($"Configuration file '{_filePath}' is not valid JSON: {ex.Message}",
+                ex);
         }
 
         _data = jsonDict == null ? new() : FlattenDictionary(jsonDict);
     }
 
     private Dictionary<string, string> FlattenDictionary(
-        Dictionary<string, object> dict, 
+        Dictionary<string, object> dict,
         string prefix = "")
     {
         var result = new Dictionary<string, string>();
         foreach (var kvp in dict)
         {
             var key = string.IsNullOrEmpty(prefix) ? kvp.Key : $"{prefix}:{kvp.Key}";
-            
+
             if (kvp.Value is JsonElement element)
             {
                 if (element.ValueKind == JsonValueKind.Object)
@@ -72,12 +73,13 @@ public class JsonConfigurationProvider : IConfigurationProvider
                 }
             }
         }
+
         return result;
     }
 
-    public bool TryGet(string key, out string value) 
+    public bool TryGet(string key, out string value)
         => _data.TryGetValue(key, out value);
 
-    public IEnumerable<string> GetChildKeys() 
+    public IEnumerable<string> GetChildKeys()
         => _data.Keys;
 }
