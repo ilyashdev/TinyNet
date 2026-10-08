@@ -414,6 +414,14 @@ reads the body as a stream through `GetBodyStream()`, not for JSON.
 
 ---
 
+## Support the author
+
+If you want to support the project, you can leave me a donation:
+- USDT Ton: UQD4OjiKEpHUsM2ssZMzC21X3xwkMqRUNOyj66qigxg1Eb6M
+- USDT Trc20: TWJPz26hsh2h55Lm3QHdtgUBWZYLhCTXcm
+
+---
+
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE).
