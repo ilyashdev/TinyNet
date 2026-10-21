@@ -24,7 +24,7 @@ TinyNet идёт другим путём:
   данные запроса читаются из одного места, ответ собирается одним способом. Два способа
   сделать одно и то же считаются ошибкой.
 - **Ничего лишнего.** Свой HTTP/1.1-сервер, DI-контейнер, конфигурация и конвейер примерно в
-  3 300 строк, без NuGet-зависимостей и без ASP.NET под капотом.
+  3 200 строк, без NuGet-зависимостей и без ASP.NET под капотом.
 - **Фреймворк решает то, что не стоит выбора.** Времена жизни классов-обработчиков, фильтров и
   middleware фиксированы, как и модель конкурентности.
 - **Проверка до первого запроса.** Компилятор проверяет, что маршрут указывает на метод с
@@ -43,7 +43,8 @@ TinyNet идёт другим путём:
 - Внедрение зависимостей с временами жизни singleton, scoped и transient
 - Проверка времён жизни на старте: scoped внутри singleton роняет сборку приложения
 - Явное дерево маршрутов: группы, вложенные группы и шаблоны вида `/users/{id}`
-- Обработчики — делегаты или методы обычных классов, создаваемых из DI на каждый запрос
+- Обработчики — делегаты или методы обычных классов, создаваемых из DI на каждый запрос;
+  обработчик возвращает `HttpResponse`, а если чего-то ждёт — `Task<HttpResponse>`
 - Глобальные middleware, фильтры на группах маршрутов и на отдельных эндпоинтах
 - `404` на неизвестный путь, `405` с `Allow` на известный путь с другим методом, `HEAD`
   обслуживается эндпоинтом `GET`
@@ -53,6 +54,9 @@ TinyNet идёт другим путём:
 - HTTP/1.1 и HTTP/1.0 со строгим разбором по RFC 9112; keep-alive и пайплайнинг запросов
 - Тела запроса фиксированной длины и chunked, `Expect: 100-continue`
 - Лимиты запроса с ответами `400`, `408`, `413` и `431`
+- Известные атаки отклоняются: тесты прогоняют на живом сервере опубликованные CVE Kestrel, Go,
+  Node.js, Netty, Puma, nginx, Envoy и Apache — request smuggling, огромные и медленные
+  запросы, обход пути
 - Конкурентность: слот на запрос, ограниченная очередь и `503` при её заполнении; лимит
   соединений
 
@@ -77,8 +81,7 @@ builder.AddEnvironmentVariables("TINYNET_");
 builder.Services.AddSingleton<Greeter>();
 builder.RegisterMiddleware<LoggingMiddleware>();
 
-builder.Routes.AddGet("/health", (request, context) =>
-    Task.FromResult(context.Response().Text("ok")));
+builder.Routes.AddGet("/health", (request, context) => context.Response().Text("ok"));
 
 builder.Routes
     .AddGroup("/hello")
@@ -95,8 +98,8 @@ public class HelloHandler
 
     public HelloHandler(Greeter greeter) => _greeter = greeter;
 
-    public Task<HttpResponse> Get(HttpRequest request, HttpContext context)
-        => Task.FromResult(context.Response().Json(new { message = _greeter.Greet(request.GetFromRoute("name")) }));
+    public HttpResponse Get(HttpRequest request, HttpContext context)
+        => context.Response().Json(new { message = _greeter.Greet(request.GetFromRoute("name")) });
 }
 ```
 
@@ -106,7 +109,8 @@ public class HelloHandler
 }
 ```
 
-Полное приложение, использующее все возможности, — в [`TinyNet.Example`](TinyNet.Example/README.ru.md).
+Небольшое веб-приложение на фреймворке — страница заметок с HTML-формами — в
+[`TinyNet.Example`](TinyNet.Example/README.ru.md).
 
 ---
 
@@ -115,7 +119,7 @@ public class HelloHandler
 | Проект                                            | Назначение                                           |
 |---------------------------------------------------|------------------------------------------------------|
 | `TinyNet`                                         | Фреймворк                                            |
-| [`TinyNet.Example`](TinyNet.Example/README.ru.md) | Пример приложения, использующего все возможности     |
+| [`TinyNet.Example`](TinyNet.Example/README.ru.md) | Пример веб-приложения: заметки с HTML-формами        |
 | [`TinyNet.Tests`](TinyNet.Tests/README.ru.md)     | Тесты                                                |
 | [`TinyNet.K6Bench`](TinyNet.K6Bench/README.ru.md) | Симуляторы нагрузки и сценарии k6                    |
 
@@ -228,10 +232,11 @@ Captive dependency: Reports (Singleton) -> ReportBuilder (Transient) -> DbSessio
 
 ## Маршруты и обработчики
 
-Маршруты объявляются в одном месте — в дереве `builder.Routes`. У всех обработчиков одна
-сигнатура:
+Маршруты объявляются в одном месте — в дереве `builder.Routes`. Обработчик принимает запрос и
+контекст и возвращает ответ — сразу или задачей, если чего-то ждёт, например чтения тела:
 
 ```csharp
+delegate HttpResponse SyncRequestDelegate(HttpRequest request, HttpContext context);
 delegate Task<HttpResponse> RequestDelegate(HttpRequest request, HttpContext context);
 ```
 
@@ -239,8 +244,7 @@ delegate Task<HttpResponse> RequestDelegate(HttpRequest request, HttpContext con
 запрос. `h => h.Get` выбирает метод, а сигнатуру проверяет компилятор:
 
 ```csharp
-builder.Routes.AddGet("/health", (request, context) =>
-    Task.FromResult(context.Response().Text("ok")));
+builder.Routes.AddGet("/health", (request, context) => context.Response().Text("ok"));
 
 var users = builder.Routes
     .AddGroup("/users")
@@ -253,6 +257,10 @@ var users = builder.Routes
 
 `AddGet`, `AddPost`, `AddPut`, `AddPatch` и `AddDelete` возвращают группу, поэтому вызовы идут
 цепочкой; `AddGroup` возвращает новую группу.
+
+Синхронный обработчик не может прочитать тело: `ReadJsonAsync` и `BufferBodyAsync`
+асинхронные, а у потока тела нет синхронного `Read` — чтобы медленный клиент не мог
+заблокировать поток.
 
 - Фильтр группы действует на все эндпоинты внутри неё, включая вложенные группы. Фильтры
   выполняются от внешней группы к внутренней, затем фильтры самого эндпоинта; внутри уровня —
@@ -357,12 +365,15 @@ return next(request, context);
 | Исключение                                      | Ответ             | Соединение |
 |-------------------------------------------------|-------------------|------------|
 | `RequestValueException`, `RequestJsonException` | `400`             | остаётся   |
-| тело слишком большое или битое                  | `413`, `400`      | закрыто    |
+| тело слишком большое, битое или оборванное      | `413`, `400`      | закрыто    |
 | тело слишком медленное                          | `408`             | закрыто    |
 | любое другое                                    | `500`, пишется в лог | остаётся |
 
 Ошибки в голове запроса (`400`, `408`, `431` и `413` на заявленный `Content-Length` сверх
 лимита) получают ответ до конвейера, поэтому middleware их не видят.
+
+После ошибки соединение закрывается мягко: сервер ещё немного дочитывает то, что клиент
+продолжает слать, чтобы ответ с ошибкой не потерялся из-за сброса TCP.
 
 ---
 

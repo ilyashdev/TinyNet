@@ -24,7 +24,7 @@ internal static class ResponseWriter
         var bodyAllowed = status is not (StatusCodes.NoContent or StatusCodes.ResetContent or StatusCodes.NotModified);
         var isStream = response.Stream is not null;
         long? length = isStream ? response.ContentLength : response.Buffer.Length;
-        var chunked = bodyAllowed && length is null && protocol == "HTTP/1.1";
+        var chunked = bodyAllowed && length is null && protocol == HttpProtocols.Http11;
         if (bodyAllowed && length is null && !chunked)
             keepAlive = false;
 
@@ -53,7 +53,8 @@ internal static class ResponseWriter
     {
         var status = response.StatusCode;
         var head = new StringBuilder(256)
-            .Append("HTTP/1.1 ")
+            .Append(HttpProtocols.Http11)
+            .Append(' ')
             .Append(status.ToString(CultureInfo.InvariantCulture))
             .Append(' ')
             .Append(ReasonPhrase(status))
@@ -82,7 +83,7 @@ internal static class ResponseWriter
 
         if (!keepAlive)
             AppendHeader(head, HeaderNames.Connection, "close");
-        else if (protocol == "HTTP/1.0")
+        else if (protocol == HttpProtocols.Http10)
             AppendHeader(head, HeaderNames.Connection, "keep-alive");
 
         return head.Append("\r\n").ToString();

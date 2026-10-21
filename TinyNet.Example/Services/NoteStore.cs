@@ -8,29 +8,13 @@ public class NoteStore
     private readonly ConcurrentDictionary<int, Note> _notes = new();
     private int _lastId;
 
-    public IReadOnlyList<Note> List(int take)
-        => _notes.Values.OrderBy(n => n.Id).Take(take).ToList();
+    public IReadOnlyList<Note> All()
+        => _notes.Values.OrderBy(n => n.Id).ToList();
 
-    public Note Add(NoteInput input)
+    public void Add(string title, string text)
     {
-        var note = new Note(Interlocked.Increment(ref _lastId), input.Title, input.Text);
-        _notes[note.Id] = note;
-        return note;
-    }
-
-    public Note? Find(int id)
-        => _notes.GetValueOrDefault(id);
-
-    public Note? Update(int id, Func<Note, Note> change)
-    {
-        while (_notes.TryGetValue(id, out var current))
-        {
-            var updated = change(current) with { Id = id };
-            if (_notes.TryUpdate(id, updated, current))
-                return updated;
-        }
-
-        return null;
+        var id = Interlocked.Increment(ref _lastId);
+        _notes[id] = new Note(id, title, text);
     }
 
     public bool Remove(int id)

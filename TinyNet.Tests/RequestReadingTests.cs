@@ -61,6 +61,19 @@ public class RequestReadingTests
         Assert.StartsWith("HTTP/1.1 408", response);
     }
 
+    [Fact]
+    public async Task RejectionWithUnreadTail_StillReachesTheClient()
+    {
+        await using var server = TestServer.Start(Routes);
+
+        using var socket = await server.ConnectAsync();
+        await socket.SendAsync(Encoding.ASCII.GetBytes("POST /echo HTTP/1.1\nHost: localhost\r\nContent-Length: 40000\r\n\r\n"));
+        await Task.Delay(200);
+        await socket.SendAsync(new byte[40_000]);
+
+        Assert.StartsWith("HTTP/1.1 400", await TestServer.ReadToEndAsync(socket));
+    }
+
     private static void Routes(GroupRoute routes) => routes
         .AddPost("/ignore", (_, context) => Task.FromResult(context.Response().Text("ignored")))
         .AddPost("/echo", Echo)

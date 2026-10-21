@@ -5,7 +5,7 @@ using TinyNet.Exceptions;
 
 namespace TinyNet.Protocols.Streams;
 
-internal sealed class ChunkedBodyStream : Stream
+internal sealed class ChunkedBodyStream : BodyStream
 {
     private const int MaxLineLength = 4096;
 
@@ -33,7 +33,7 @@ internal sealed class ChunkedBodyStream : Stream
         _maxLength = maxLength;
     }
 
-    public override async ValueTask<int> ReadAsync(Memory<byte> destination, CancellationToken ct = default)
+    protected override async ValueTask<int> ReadBodyAsync(Memory<byte> destination, CancellationToken ct)
     {
         if (_completed || destination.IsEmpty)
             return 0;
@@ -72,12 +72,6 @@ internal sealed class ChunkedBodyStream : Stream
         _chunkRemaining -= count;
         return count;
     }
-
-    public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken ct)
-        => ReadAsync(buffer.AsMemory(offset, count), ct).AsTask();
-
-    public override int Read(byte[] buffer, int offset, int count)
-        => throw new NotSupportedException("Synchronous reads are not supported. Use ReadAsync.");
 
     private long ParseChunkSize(byte[] line)
     {
@@ -205,25 +199,4 @@ internal sealed class ChunkedBodyStream : Stream
 
     private static ProtocolException Malformed()
         => new("Malformed chunked request body.", 400);
-
-    public override void Flush()
-    {
-    }
-
-    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
-
-    public override void SetLength(long value) => throw new NotSupportedException();
-
-    public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
-
-    public override bool CanRead => true;
-    public override bool CanSeek => false;
-    public override bool CanWrite => false;
-    public override long Length => throw new NotSupportedException();
-
-    public override long Position
-    {
-        get => throw new NotSupportedException();
-        set => throw new NotSupportedException();
-    }
 }

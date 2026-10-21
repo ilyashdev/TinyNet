@@ -97,8 +97,12 @@ public sealed class WebApplication
                         await _protocol.ProcessAsync(connection, _app, ct);
                 }
             }
-            catch (Exception e) when (e is IOException or OperationCanceledException)
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
+            }
+            catch (IOException e)
+            {
+                Console.WriteLine($"Connection closed: {e.Message}");
             }
             catch (Exception e)
             {

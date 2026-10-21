@@ -20,6 +20,7 @@ public sealed class HttpRequest
     private bool _consumed;
     private readonly HttpSettings _settings;
     private readonly CancellationToken _ct;
+    internal bool IsAborted => _ct.IsCancellationRequested;
 
     internal HttpRequest(
         string method,

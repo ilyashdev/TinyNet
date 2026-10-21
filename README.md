@@ -24,7 +24,7 @@ TinyNet goes the other way:
   is read from one place, a response is built in one way. Two ways to do the same thing are
   treated as a bug.
 - **No bloat.** Its own HTTP/1.1 server, DI container, configuration and pipeline in about
-  3 300 lines, with no NuGet dependencies and no ASP.NET underneath.
+  3 200 lines, with no NuGet dependencies and no ASP.NET underneath.
 - **The framework decides what is not worth choosing.** Lifetimes of handler classes, filters
   and middleware are fixed, and so is the concurrency model.
 - **Checked before the first request.** The compiler checks that a route points to a method
@@ -43,7 +43,8 @@ TinyNet goes the other way:
 - Dependency injection with singleton, scoped and transient lifetimes
 - Lifetime validation at startup: a scoped dependency inside a singleton fails the build
 - Explicit route tree with groups, nested groups and templates such as `/users/{id}`
-- Handlers as delegates or as methods of plain classes created from DI per request
+- Handlers as delegates or as methods of plain classes created from DI per request; a handler
+  returns `HttpResponse`, or `Task<HttpResponse>` when it awaits something
 - Global middleware, and filters on route groups and on single endpoints
 - `404` for an unknown path, `405` with `Allow` for a known path with another method, `HEAD`
   served by the `GET` endpoint
@@ -53,6 +54,9 @@ TinyNet goes the other way:
 - HTTP/1.1 and HTTP/1.0 parsed strictly by RFC 9112; keep-alive and pipelined requests
 - Fixed-length and chunked request bodies, `Expect: 100-continue`
 - Request limits answered with `400`, `408`, `413` and `431`
+- Known attacks rejected: the test suite replays published CVEs of Kestrel, Go, Node.js,
+  Netty, Puma, nginx, Envoy and Apache — request smuggling, oversized and slow requests,
+  path traversal — against a running server
 - Concurrency: a slot per request, a bounded queue and `503` when it is full; a connection
   limit
 
@@ -77,8 +81,7 @@ builder.AddEnvironmentVariables("TINYNET_");
 builder.Services.AddSingleton<Greeter>();
 builder.RegisterMiddleware<LoggingMiddleware>();
 
-builder.Routes.AddGet("/health", (request, context) =>
-    Task.FromResult(context.Response().Text("ok")));
+builder.Routes.AddGet("/health", (request, context) => context.Response().Text("ok"));
 
 builder.Routes
     .AddGroup("/hello")
@@ -95,8 +98,8 @@ public class HelloHandler
 
     public HelloHandler(Greeter greeter) => _greeter = greeter;
 
-    public Task<HttpResponse> Get(HttpRequest request, HttpContext context)
-        => Task.FromResult(context.Response().Json(new { message = _greeter.Greet(request.GetFromRoute("name")) }));
+    public HttpResponse Get(HttpRequest request, HttpContext context)
+        => context.Response().Json(new { message = _greeter.Greet(request.GetFromRoute("name")) });
 }
 ```
 
@@ -106,7 +109,8 @@ public class HelloHandler
 }
 ```
 
-A complete application that uses every feature is in [`TinyNet.Example`](TinyNet.Example/README.md).
+A small web application built on the framework — a notes page with HTML forms — is in
+[`TinyNet.Example`](TinyNet.Example/README.md).
 
 ---
 
@@ -115,7 +119,7 @@ A complete application that uses every feature is in [`TinyNet.Example`](TinyNet
 | Project                                        | Purpose                                           |
 |------------------------------------------------|---------------------------------------------------|
 | `TinyNet`                                      | The framework                                     |
-| [`TinyNet.Example`](TinyNet.Example/README.md) | Example application using every framework feature |
+| [`TinyNet.Example`](TinyNet.Example/README.md) | Example web application: notes with HTML forms    |
 | [`TinyNet.Tests`](TinyNet.Tests/README.md)     | Test suite                                        |
 | [`TinyNet.K6Bench`](TinyNet.K6Bench/README.md) | Load simulators and k6 scenarios                  |
 
@@ -226,10 +230,12 @@ resolution time.
 
 ## Routes and handlers
 
-Routes are declared in one place, the route tree on `builder.Routes`. Every handler has the
-same signature:
+Routes are declared in one place, the route tree on `builder.Routes`. A handler takes the
+request and the context and returns a response — directly, or as a task when it awaits
+something, such as reading the body:
 
 ```csharp
+delegate HttpResponse SyncRequestDelegate(HttpRequest request, HttpContext context);
 delegate Task<HttpResponse> RequestDelegate(HttpRequest request, HttpContext context);
 ```
 
@@ -237,8 +243,7 @@ A handler is either a delegate, or a method of a class that the framework create
 each request. `h => h.Get` picks the method, and the compiler checks its signature:
 
 ```csharp
-builder.Routes.AddGet("/health", (request, context) =>
-    Task.FromResult(context.Response().Text("ok")));
+builder.Routes.AddGet("/health", (request, context) => context.Response().Text("ok"));
 
 var users = builder.Routes
     .AddGroup("/users")
@@ -251,6 +256,10 @@ var users = builder.Routes
 
 `AddGet`, `AddPost`, `AddPut`, `AddPatch` and `AddDelete` return the group, so calls chain;
 `AddGroup` returns the new group.
+
+A synchronous handler cannot read the body: `ReadJsonAsync` and `BufferBodyAsync` are
+asynchronous, and the body stream has no synchronous `Read`, so that a slow client cannot
+block a thread.
 
 - A group filter applies to every endpoint inside the group, nested groups included. Filters
   run from the outer group to the inner one, then the endpoint's own filters; within a level —
@@ -355,12 +364,15 @@ the framework:
 | Exception                                         | Response | Connection |
 |---------------------------------------------------|----------|------------|
 | `RequestValueException`, `RequestJsonException`   | `400`    | kept       |
-| body too large or malformed                       | `413`, `400` | closed |
+| body too large, malformed or cut off              | `413`, `400` | closed |
 | body too slow                                     | `408`    | closed     |
 | anything else                                     | `500`, logged | kept  |
 
 Errors in the request head (`400`, `408`, `431`, and `413` for a declared `Content-Length`
 over the limit) are answered before the pipeline, so middleware does not see them.
+
+After an error the connection is closed gracefully: the server keeps reading what the client
+is still sending for a moment, so the error response is not lost to a TCP reset.
 
 ---
 

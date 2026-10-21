@@ -81,6 +81,44 @@ public sealed class GroupRoute
         where T : class
         => AddEndpoint(nameof(HttpMethods.DELETE), path, handler, setup);
 
+    public GroupRoute AddGet(string path, SyncRequestDelegate handler, Action<EndpointRoute>? setup = null)
+        => AddGet(path, ToAsync(handler), setup);
+
+    public GroupRoute AddGet<T>(string path, Func<T, SyncRequestDelegate> handler, Action<EndpointRoute>? setup = null)
+        where T : class
+        => AddGet<T>(path, controller => ToAsync(handler(controller)), setup);
+
+    public GroupRoute AddPost(string path, SyncRequestDelegate handler, Action<EndpointRoute>? setup = null)
+        => AddPost(path, ToAsync(handler), setup);
+
+    public GroupRoute AddPost<T>(string path, Func<T, SyncRequestDelegate> handler, Action<EndpointRoute>? setup = null)
+        where T : class
+        => AddPost<T>(path, controller => ToAsync(handler(controller)), setup);
+
+    public GroupRoute AddPut(string path, SyncRequestDelegate handler, Action<EndpointRoute>? setup = null)
+        => AddPut(path, ToAsync(handler), setup);
+
+    public GroupRoute AddPut<T>(string path, Func<T, SyncRequestDelegate> handler, Action<EndpointRoute>? setup = null)
+        where T : class
+        => AddPut<T>(path, controller => ToAsync(handler(controller)), setup);
+
+    public GroupRoute AddPatch(string path, SyncRequestDelegate handler, Action<EndpointRoute>? setup = null)
+        => AddPatch(path, ToAsync(handler), setup);
+
+    public GroupRoute AddPatch<T>(string path, Func<T, SyncRequestDelegate> handler, Action<EndpointRoute>? setup = null)
+        where T : class
+        => AddPatch<T>(path, controller => ToAsync(handler(controller)), setup);
+
+    public GroupRoute AddDelete(string path, SyncRequestDelegate handler, Action<EndpointRoute>? setup = null)
+        => AddDelete(path, ToAsync(handler), setup);
+
+    public GroupRoute AddDelete<T>(string path, Func<T, SyncRequestDelegate> handler, Action<EndpointRoute>? setup = null)
+        where T : class
+        => AddDelete<T>(path, controller => ToAsync(handler(controller)), setup);
+
+    private static RequestDelegate ToAsync(SyncRequestDelegate handler)
+        => (request, context) => Task.FromResult(handler(request, context));
+
     private GroupRoute AddEndpoint<T>(
         string method, string path, Func<T, RequestDelegate> handler, Action<EndpointRoute>? setup) where T : class
         => AddEndpoint(method, path, typeof(T),

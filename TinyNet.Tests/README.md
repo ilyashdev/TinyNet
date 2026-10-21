@@ -21,8 +21,9 @@ by hand, and what has broken before — not everything the framework does.
 
 | File                       | What it pins down                                                                                                                                                                                                                                                         |
 |----------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `HttpParsingTests`         | Parsing the request head: query values with `=`, a head arriving one byte at a time, rejecting conflicting `Content-Length`, `Content-Length` with `Transfer-Encoding`, a second `Host`, a bare LF and a body over the limit; response `Content-Length` measured in bytes |
-| `RequestReadingTests`      | A real connection: pipelined requests answered in order, an unread body drained before the next request, a chunked body, `413` for a chunked body over the limit, `408` for an unfinished head                                                                            |
+| `HttpParsingTests`         | Parsing the request head with `HeadParser` and `RequestHeadBuilder`: query values with `=`, a head arriving one byte at a time, rejecting conflicting `Content-Length`, `Content-Length` with `Transfer-Encoding`, a second `Host`, a bare LF and a body over the limit; response `Content-Length` measured in bytes |
+| `CveTests`                 | Published CVEs of other servers replayed against a real one: request smuggling (Kestrel, Go, Node.js, Netty, Puma, nginx, Envoy) must get the exact error status, must not reach the hidden second request, and must leave the server alive; chunk extension flood, oversized head, slow body; path traversal through dot segments |
+| `RequestReadingTests`      | A real connection: pipelined requests answered in order, an unread body drained before the next request, a chunked body, `413` for a chunked body over the limit, `408` for an unfinished head, an error response that still reaches a client who keeps sending                |
 | `RequestValuesTests`       | `GetFromQuery<T>` returns `null` for a missing value and throws a `400` exception for an unparsable one; `ReadJsonAsync<T>` ignores property name case and throws a `400` exception for a body that does not fit; the body is read once unless buffered                   |
 | `RoutingTests`             | Matching by path and method (literal vs parameter, `404` vs `405`, `HEAD` for a `GET` endpoint), `400` for a non-numeric route value, filter order from the outer group to the endpoint, `400` for a malformed JSON body                                                  |
 | `DependencyInjectionTests` | Lifetimes, `Validate()` catching a singleton that reaches a scoped service through a transient, disposal order                                                                                                                                                            |
@@ -32,7 +33,11 @@ by hand, and what has broken before — not everything the framework does.
 
 ## Status
 
-All 37 tests pass.
+All 62 tests pass.
+
+An attack test is only useful when the protection it targets is the *only* thing wrong with
+the request. Each one was checked by switching that protection off and watching the test
+fail; a request that broke two rules at once passed even without the protection.
 
 ---
 

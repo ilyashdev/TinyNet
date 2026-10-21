@@ -1,6 +1,7 @@
 using System.Text.Json;
 using TinyNet.Configurations;
 using TinyNet.DI;
+using TinyNet.Exceptions;
 using TinyNet.Http;
 using TinyNet.Middlewares;
 using TinyNet.Protocols.Http1;
@@ -99,10 +100,10 @@ public class AppBuilder
                 conf.GetValue<int>(FrameworkDefaults.ServerPort),
                 conf.GetValue<int>(FrameworkDefaults.ServerListenBacklog)),
             new ConnectionHandler(settings, Services, limits),
-            LimitConcurrency(_pipeline.InvokeAsync,
+            CatchErrors(LimitConcurrency(_pipeline.InvokeAsync,
                 conf.GetValue<int>(FrameworkDefaults.ServerMaxConcurrentRequests),
                 conf.GetValue<int>(FrameworkDefaults.ServerMaxQueuedRequests),
-                conf.GetValue<int>(FrameworkDefaults.ServerRequestQueueTimeoutSeconds)),
+                conf.GetValue<int>(FrameworkDefaults.ServerRequestQueueTimeoutSeconds))),
             Services,
             conf.GetValue<int>(FrameworkDefaults.ServerMaxConnections),
             acceptLoops);
@@ -134,6 +135,27 @@ public class AppBuilder
             finally
             {
                 Interlocked.Decrement(ref inSystem);
+            }
+        };
+    }
+
+    internal static RequestDelegate CatchErrors(RequestDelegate app)
+    {
+        return async (request, context) =>
+        {
+            try
+            {
+                return await app(request, context);
+            }
+            catch (RequestException e)
+            {
+                Console.WriteLine($"Request rejected: {e.StatusCode} {e.Message}");
+                return context.Response().Status(e.StatusCode).Text(e.Message);
+            }
+            catch (Exception e) when (!request.IsAborted)
+            {
+                Console.WriteLine($"Processing error: {e}");
+                return context.Response().Status(StatusCodes.InternalServerError).Text("Internal server error.");
             }
         };
     }
